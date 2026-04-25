@@ -3,6 +3,8 @@ import type { ReactNode } from 'react'
 import { FolderOpen, Plus, AlertTriangle, Loader2, Rocket } from 'lucide-react'
 import { OnboardingShell } from './OnboardingShell'
 import { Button } from '@/components/ui/button'
+import type { TranslationKey } from '../lib/i18nMessages'
+import { useI18n } from '../lib/useI18n'
 import tolariaIcon from '@/assets/tolaria-icon.svg'
 
 interface WelcomeScreenProps {
@@ -22,10 +24,10 @@ interface WelcomeScreenProps {
 interface WelcomeScreenPresentation {
   heroBackground: string
   heroIcon: ReactNode
-  openFolderLabel: string
-  subtitle: string
-  templateDescription: string
-  title: string
+  openFolderLabelKey: TranslationKey
+  subtitleKey: TranslationKey
+  templateDescriptionKey: TranslationKey
+  titleKey: TranslationKey
 }
 
 type WelcomeActionButtonRef = React.RefObject<HTMLButtonElement | null>
@@ -269,31 +271,26 @@ function OptionButton({
 
 function getWelcomeScreenPresentation(
   mode: WelcomeScreenProps['mode'],
-  defaultVaultPath: string,
   isOffline: boolean,
 ): WelcomeScreenPresentation {
   if (mode === 'welcome') {
     return {
       heroBackground: 'transparent',
       heroIcon: <img src={tolariaIcon} alt="Tolaria icon" style={BRAND_ICON_STYLE} />,
-      openFolderLabel: 'Open existing vault',
-      subtitle: 'Markdown knowledge management for the age of AI',
-      templateDescription: isOffline
-        ? `Requires internet — clone later. Suggested path: ${defaultVaultPath}`
-        : 'Download the getting started vault',
-      title: 'Welcome to Tolaria',
+      openFolderLabelKey: 'welcome.openExisting',
+      subtitleKey: 'welcome.subtitle',
+      templateDescriptionKey: isOffline ? 'welcome.templateDescriptionOffline' : 'welcome.templateDescription',
+      titleKey: 'welcome.title',
     }
   }
 
   return {
     heroBackground: 'var(--accent-yellow-light)',
     heroIcon: <AlertTriangle size={28} style={{ color: 'var(--accent-orange)' }} />,
-    openFolderLabel: 'Choose a different folder',
-    subtitle: 'The vault folder could not be found on disk.\nIt may have been moved or deleted.',
-    templateDescription: isOffline
-      ? `Requires internet — clone later. Suggested path: ${defaultVaultPath}`
-      : 'Download the getting started vault',
-    title: 'Vault not found',
+    openFolderLabelKey: 'welcome.chooseDifferentFolder',
+    subtitleKey: 'welcome.missingSubtitle',
+    templateDescriptionKey: isOffline ? 'welcome.templateDescriptionOffline' : 'welcome.templateDescription',
+    titleKey: 'welcome.missingTitle',
   }
 }
 
@@ -380,8 +377,9 @@ export function WelcomeScreen({
   error,
   canRetryTemplate,
 }: WelcomeScreenProps) {
+  const { t } = useI18n()
   const busy = creatingAction !== null
-  const presentation = getWelcomeScreenPresentation(mode, defaultVaultPath, isOffline)
+  const presentation = getWelcomeScreenPresentation(mode, isOffline)
   const { templateActionRef, createEmptyActionRef, openFolderActionRef } = useWelcomeActionButtons({
     mode,
     busy,
@@ -408,9 +406,9 @@ export function WelcomeScreen({
         </div>
 
         <div style={{ textAlign: 'center' }}>
-          <h1 style={TITLE_STYLE}>{presentation.title}</h1>
+          <h1 style={TITLE_STYLE}>{t(presentation.titleKey)}</h1>
           <p style={{ ...SUBTITLE_STYLE, marginTop: 8 }}>
-            {presentation.subtitle}
+            {t(presentation.subtitleKey)}
           </p>
         </div>
 
@@ -420,10 +418,10 @@ export function WelcomeScreen({
           <OptionButton
             icon={<Rocket size={18} style={{ color: 'var(--accent-purple)' }} />}
             iconBg="var(--accent-purple-light)"
-            label="Get started with a template"
-            description={presentation.templateDescription}
-            loadingLabel="Downloading template…"
-            loadingDescription="Cloning the Getting Started vault template"
+            label={t('welcome.templateLabel')}
+            description={t(presentation.templateDescriptionKey, { defaultVaultPath })}
+            loadingLabel={t('welcome.templateLoadingLabel')}
+            loadingDescription={t('welcome.templateLoadingDescription')}
             onClick={onCreateVault}
             disabled={busy || isOffline}
             loading={creatingAction === 'template'}
@@ -435,10 +433,10 @@ export function WelcomeScreen({
           <OptionButton
             icon={<Plus size={18} style={{ color: 'var(--accent-blue)' }} />}
             iconBg="var(--accent-blue-light)"
-            label="Create empty vault"
-            description="Start fresh in an empty folder with Tolaria defaults"
-            loadingLabel="Creating vault…"
-            loadingDescription="Preparing Tolaria defaults in the selected folder"
+            label={t('welcome.emptyLabel')}
+            description={t('welcome.emptyDescription')}
+            loadingLabel={t('welcome.emptyLoadingLabel')}
+            loadingDescription={t('welcome.emptyLoadingDescription')}
             onClick={onCreateEmptyVault}
             disabled={busy}
             loading={creatingAction === 'empty'}
@@ -449,8 +447,8 @@ export function WelcomeScreen({
           <OptionButton
             icon={<FolderOpen size={18} style={{ color: 'var(--accent-green)' }} />}
             iconBg="var(--accent-green-light)"
-            label={presentation.openFolderLabel}
-            description="Point to a folder you already have"
+            label={t(presentation.openFolderLabelKey)}
+            description={t('welcome.openFolderDescription')}
             onClick={onOpenFolder}
             disabled={busy}
             testId="welcome-open-folder"
@@ -460,7 +458,7 @@ export function WelcomeScreen({
 
         {creatingAction === 'template' && (
           <p style={STATUS_STYLE} data-testid="welcome-status" role="status" aria-live="polite">
-            Downloading the Getting Started vault template…
+            {t('welcome.downloadingStatus')}
           </p>
         )}
 
@@ -478,7 +476,7 @@ export function WelcomeScreen({
                 data-testid="welcome-retry-template"
                 className="shadow-none"
               >
-                Retry download
+                {t('welcome.retryDownload')}
               </Button>
             )}
           </div>

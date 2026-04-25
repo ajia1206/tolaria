@@ -14,6 +14,7 @@ const defaultSettings: Settings = {
   analytics_enabled: null,
   anonymous_id: null,
   release_channel: null,
+  ui_language: null,
   theme_mode: null,
   default_ai_agent: null,
 }
@@ -29,6 +30,7 @@ const savedSettings: Settings = {
   analytics_enabled: null,
   anonymous_id: null,
   release_channel: null,
+  ui_language: null,
   theme_mode: null,
   default_ai_agent: null,
 }
@@ -95,6 +97,21 @@ describe('useSettings', () => {
     expect(result.current.settings.release_channel).toBeNull()
   })
 
+  it('normalizes app language on load', async () => {
+    mockSettingsStore = {
+      ...savedSettings,
+      ui_language: 'zh-CN' as Settings['ui_language'],
+    }
+
+    const { result } = renderHook(() => useSettings())
+
+    await waitFor(() => {
+      expect(result.current.loaded).toBe(true)
+    })
+
+    expect(result.current.settings.ui_language).toBe('zh-Hans')
+  })
+
   it('saves settings via backend', async () => {
     const { result } = renderHook(() => useSettings())
 
@@ -113,6 +130,7 @@ describe('useSettings', () => {
       analytics_enabled: null,
       anonymous_id: null,
       release_channel: null,
+      ui_language: null,
       theme_mode: null,
       default_ai_agent: null,
     }

@@ -12,6 +12,8 @@ import { NoteTitleIcon } from '../NoteTitleIcon'
 import { isSelectionActive } from '../SidebarParts'
 import { SidebarGroupHeader } from './SidebarGroupHeader'
 import { SIDEBAR_ITEM_PADDING } from './sidebarStyles'
+import { useI18n } from '../../lib/useI18n'
+import { translateVaultDisplayText } from '../../lib/vaultDisplay'
 
 const FAVORITE_TYPE_ICON_MAP: Record<string, string> = {
   Project: 'wrench',
@@ -48,6 +50,7 @@ function SortableFavoriteItem({
   onSelect: () => void
   typeEntryMap: Record<string, VaultEntry>
 }) {
+  const { locale } = useI18n()
   const { attributes, listeners, setNodeRef, transform, transition, isDragging } = useSortable({ id: entry.path })
   const typeEntry = entry.isA ? typeEntryMap[entry.isA] : undefined
   const icon = getFavoriteIcon(entry, typeEntryMap)
@@ -69,7 +72,7 @@ function SortableFavoriteItem({
         <div className="flex min-w-0 flex-1 items-center" style={{ gap: 4 }}>
           <NoteTitleIcon icon={icon} size={16} color={typeColor} />
           <span className="truncate text-[13px] font-medium" style={{ marginLeft: 4, color: isActive ? typeColor : undefined }}>
-            {entry.title}
+            {translateVaultDisplayText(locale, entry.title)}
           </span>
         </div>
       </div>
@@ -111,6 +114,7 @@ export function FavoritesSection({
   collapsed,
   onToggle,
 }: FavoritesSectionProps) {
+  const { t } = useI18n()
   const favorites = useMemo(() => sortFavorites(entries), [entries])
   const favoriteIds = useMemo(() => favorites.map((entry) => entry.path), [favorites])
   const typeEntryMap = useMemo(() => buildTypeEntryMap(entries), [entries])
@@ -134,7 +138,7 @@ export function FavoritesSection({
 
   return (
     <div style={{ padding: '0 6px' }}>
-      <SidebarGroupHeader label="FAVORITES" collapsed={collapsed} onToggle={onToggle} count={favorites.length} />
+      <SidebarGroupHeader label={t('sidebar.favorites').toUpperCase()} collapsed={collapsed} onToggle={onToggle} count={favorites.length} />
       {!collapsed && (
         <DndContext sensors={sensors} collisionDetection={closestCenter} onDragEnd={handleDragEnd}>
           <SortableContext items={favoriteIds} strategy={verticalListSortingStrategy}>

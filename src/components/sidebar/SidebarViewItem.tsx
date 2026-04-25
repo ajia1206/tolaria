@@ -5,6 +5,8 @@ import { Funnel, PencilSimple, Trash } from '@phosphor-icons/react'
 import { NoteTitleIcon } from '../NoteTitleIcon'
 import { SidebarCountPill } from '../SidebarParts'
 import { SIDEBAR_ITEM_PADDING } from './sidebarStyles'
+import { useI18n } from '../../lib/useI18n'
+import { translateVaultDisplayText } from '../../lib/vaultDisplay'
 
 interface SidebarViewItemProps {
   view: ViewFile
@@ -23,7 +25,9 @@ export function SidebarViewItem({
   onDeleteView,
   entries,
 }: SidebarViewItemProps) {
+  const { locale } = useI18n()
   const count = useMemo(() => evaluateView(view.definition, entries).length, [view.definition, entries])
+  const displayName = translateVaultDisplayText(locale, view.definition.name)
   const showCount = count > 0
   const icon = view.definition.icon
     ? <NoteTitleIcon icon={view.definition.icon} size={16} />
@@ -37,7 +41,7 @@ export function SidebarViewItem({
         onClick={onSelect}
       >
         {icon}
-        <span className="min-w-0 flex-1 truncate text-[13px] font-medium">{view.definition.name}</span>
+        <span className="min-w-0 flex-1 truncate text-[13px] font-medium">{displayName}</span>
         {showCount && (
           <SidebarCountPill
             count={count}

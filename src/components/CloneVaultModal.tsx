@@ -11,6 +11,8 @@ import {
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { isTauri, mockInvoke } from '../mock-tauri'
+import { translate, type I18nContextValue } from '../lib/i18nShared'
+import { useI18n } from '../lib/useI18n'
 
 type CloneStatus = 'idle' | 'cloning' | 'error'
 type CloneAttemptResult =
@@ -65,16 +67,20 @@ function shouldSyncSuggestedPath(localPath: string, pathDirty: boolean, previous
   return !pathDirty || !localPath.trim() || localPath === previousSuggestedPath
 }
 
-async function attemptClone(request: CloneRequest): Promise<CloneAttemptResult> {
+async function attemptClone(request: CloneRequest, t: I18nContextValue['t']): Promise<CloneAttemptResult> {
   try {
     await tauriCall<string>('clone_git_repo', request)
     return { ok: true }
   } catch (error) {
-    return { ok: false, errorMessage: `Clone failed: ${String(error)}` }
+    return { ok: false, errorMessage: t('cloneVault.failed', { error: String(error) }) }
   }
 }
 
-function useCloneVaultForm(onClose: () => void, onVaultCloned: (path: string, label: string) => void): CloneVaultFormState {
+function useCloneVaultForm(
+  onClose: () => void,
+  onVaultCloned: (path: string, label: string) => void,
+  t: I18nContextValue['t'] = (key, params) => translate('en', key, params),
+): CloneVaultFormState {
   const [repoUrl, setRepoUrl] = useState('')
   const [localPath, setLocalPath] = useState('')
   const [pathDirty, setPathDirty] = useState(false)
@@ -129,7 +135,7 @@ function useCloneVaultForm(onClose: () => void, onVaultCloned: (path: string, la
     cloneInFlightRef.current = true
     setCloneStatus('cloning')
     setCloneError(null)
-    const result = await attemptClone(request)
+    const result = await attemptClone(request, t)
     cloneInFlightRef.current = false
 
     if (result.ok) {
@@ -140,7 +146,7 @@ function useCloneVaultForm(onClose: () => void, onVaultCloned: (path: string, la
 
     setCloneStatus('error')
     setCloneError(result.errorMessage)
-  }, [handleClose, localPath, onVaultCloned, repoUrl])
+  }, [handleClose, localPath, onVaultCloned, repoUrl, t])
 
   const isCloning = cloneStatus === 'cloning'
 
@@ -159,6 +165,7 @@ function useCloneVaultForm(onClose: () => void, onVaultCloned: (path: string, la
 }
 
 export function CloneVaultModal({ open, onClose, onVaultCloned }: CloneVaultModalProps) {
+  const { t } = useI18n()
   const {
     repoUrl,
     localPath,
@@ -170,7 +177,7 @@ export function CloneVaultModal({ open, onClose, onVaultCloned }: CloneVaultModa
     handleRepoUrlChange,
     handleLocalPathChange,
     handleClone,
-  } = useCloneVaultForm(onClose, onVaultCloned)
+  } = useCloneVaultForm(onClose, onVaultCloned, t)
   const handleOpenChange = useCallback((isOpen: boolean) => {
     if (!isOpen && !isCloning) handleClose()
   }, [handleClose, isCloning])
@@ -183,19 +190,18 @@ export function CloneVaultModal({ open, onClose, onVaultCloned }: CloneVaultModa
     <Dialog open={open} onOpenChange={handleOpenChange}>
       <DialogContent className="sm:max-w-[520px]" data-testid="clone-vault-modal">
         <DialogHeader>
-          <DialogTitle>Clone Git Repo</DialogTitle>
+          <DialogTitle>{t('cloneVault.title')}</DialogTitle>
           <DialogDescription>
-            Clone any remote repository into a local vault folder. Tolaria uses your existing system git
-            configuration for authentication.
+            {t('cloneVault.description')}
           </DialogDescription>
         </DialogHeader>
 
         <form className="flex flex-col gap-4 py-2" onSubmit={handleSubmit} data-testid="clone-vault-form" aria-busy={isCloning}>
           <div className="flex flex-col gap-1.5">
-            <label className="text-xs font-medium text-foreground" htmlFor="clone-repo-url">Repository URL</label>
+            <label className="text-xs font-medium text-foreground" htmlFor="clone-repo-url">{t('cloneVault.repoUrl')}</label>
             <Input
               id="clone-repo-url"
-              placeholder="git@host:owner/repo.git or https://host/owner/repo.git"
+              placeholder={t('cloneVault.repoUrlPlaceholder')}
               value={repoUrl}
               disabled={isCloning}
               onChange={handleRepoUrlChange}
@@ -204,10 +210,10 @@ export function CloneVaultModal({ open, onClose, onVaultCloned }: CloneVaultModa
           </div>
 
           <div className="flex flex-col gap-1.5">
-            <label className="text-xs font-medium text-foreground" htmlFor="clone-vault-path">Clone to</label>
+            <label className="text-xs font-medium text-foreground" htmlFor="clone-vault-path">{t('cloneVault.cloneTo')}</label>
             <Input
               id="clone-vault-path"
-              placeholder="~/Vaults/my-vault"
+              placeholder={t('cloneVault.cloneToPlaceholder')}
               value={localPath}
               disabled={isCloning}
               onChange={handleLocalPathChange}
@@ -217,8 +223,8 @@ export function CloneVaultModal({ open, onClose, onVaultCloned }: CloneVaultModa
 
           <p className="text-xs text-muted-foreground">
             {isCloning
-              ? 'Cloning repository… Tolaria will open the vault when git finishes.'
-              : 'SSH keys, the git credential manager, `gh auth`, and other system git auth methods all work.'}
+              ? t('cloneVault.progressHelp')
+              : t('cloneVault.help')}
           </p>
 
           {cloneError && (
@@ -233,14 +239,14 @@ export function CloneVaultModal({ open, onClose, onVaultCloned }: CloneVaultModa
               disabled={isCloning}
               data-testid="clone-vault-cancel"
             >
-              Cancel
+              {t('common.cancel')}
             </Button>
             <Button
               type="submit"
               disabled={isCloneDisabled}
               data-testid="clone-vault-submit"
             >
-              {cloneStatus === 'cloning' ? 'Cloning...' : 'Clone & Open'}
+              {cloneStatus === 'cloning' ? t('cloneVault.submitting') : t('cloneVault.submit')}
             </Button>
           </DialogFooter>
         </form>

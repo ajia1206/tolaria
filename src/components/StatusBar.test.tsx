@@ -117,6 +117,23 @@ describe('StatusBar', () => {
     expect(onToggleThemeMode).toHaveBeenCalledOnce()
   })
 
+  it('calls onToggleLocale from the bottom bar', () => {
+    const onToggleLocale = vi.fn()
+    render(
+      <StatusBar
+        noteCount={100}
+        vaultPath="/Users/luca/Laputa"
+        vaults={vaults}
+        onSwitchVault={vi.fn()}
+        locale="zh-Hans"
+        onToggleLocale={onToggleLocale}
+      />,
+    )
+
+    fireEvent.click(screen.getByRole('button', { name: 'Switch to English' }))
+    expect(onToggleLocale).toHaveBeenCalledOnce()
+  })
+
   it('displays active vault name', () => {
     render(<StatusBar noteCount={100} vaultPath="/Users/luca/Laputa" vaults={vaults} onSwitchVault={vi.fn()} />)
     expect(screen.getByText('Main Vault')).toBeInTheDocument()

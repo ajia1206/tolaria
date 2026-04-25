@@ -129,12 +129,196 @@ const GIT_NO_REMOTE_DEPENDENT_IDS: &[&str] = &[VAULT_ADD_REMOTE];
 
 type MenuResult = Result<Submenu<tauri::Wry>, Box<dyn std::error::Error>>;
 
-fn build_app_menu(app: &App) -> MenuResult {
-    let settings_item = MenuItemBuilder::new("Settings...")
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum MenuLocale {
+    En,
+    ZhHans,
+}
+
+impl MenuLocale {
+    fn from_input(input: Option<&str>) -> Self {
+        let Some(value) = input else {
+            return Self::En;
+        };
+        if value.to_lowercase().starts_with("zh") {
+            Self::ZhHans
+        } else {
+            Self::En
+        }
+    }
+}
+
+struct MenuLabels {
+    settings: &'static str,
+    check_updates: &'static str,
+    file: &'static str,
+    new_note: &'static str,
+    new_type: &'static str,
+    quick_open: &'static str,
+    quick_open_alias_macos: &'static str,
+    quick_open_alias_other: &'static str,
+    save: &'static str,
+    edit: &'static str,
+    find_in_vault: &'static str,
+    toggle_note_list_search: &'static str,
+    toggle_diff: &'static str,
+    view: &'static str,
+    editor_only: &'static str,
+    editor_list: &'static str,
+    all_panels: &'static str,
+    toggle_properties: &'static str,
+    command_palette: &'static str,
+    zoom_in: &'static str,
+    zoom_out: &'static str,
+    zoom_reset: &'static str,
+    go: &'static str,
+    all_notes: &'static str,
+    archived: &'static str,
+    changes: &'static str,
+    inbox: &'static str,
+    go_back: &'static str,
+    go_forward: &'static str,
+    note: &'static str,
+    toggle_organized: &'static str,
+    archive_note: &'static str,
+    delete_note: &'static str,
+    restore_deleted_note: &'static str,
+    open_new_window: &'static str,
+    toggle_raw_editor: &'static str,
+    toggle_ai_panel: &'static str,
+    toggle_backlinks: &'static str,
+    vault: &'static str,
+    open_vault: &'static str,
+    remove_vault: &'static str,
+    restore_getting_started: &'static str,
+    add_remote: &'static str,
+    commit_push: &'static str,
+    pull: &'static str,
+    resolve_conflicts: &'static str,
+    view_changes: &'static str,
+    install_mcp: &'static str,
+    reload: &'static str,
+    repair: &'static str,
+    window: &'static str,
+}
+
+fn menu_labels(locale: MenuLocale) -> MenuLabels {
+    match locale {
+        MenuLocale::En => MenuLabels {
+            settings: "Settings...",
+            check_updates: "Check for Updates...",
+            file: "File",
+            new_note: "New Note",
+            new_type: "New Type",
+            quick_open: "Quick Open",
+            quick_open_alias_macos: "Quick Open (Cmd+O)",
+            quick_open_alias_other: "Quick Open (Ctrl+O)",
+            save: "Save",
+            edit: "Edit",
+            find_in_vault: "Find in Vault",
+            toggle_note_list_search: "Toggle Note List Search",
+            toggle_diff: "Toggle Diff Mode",
+            view: "View",
+            editor_only: "Editor Only",
+            editor_list: "Editor + Notes",
+            all_panels: "All Panels",
+            toggle_properties: "Toggle Properties Panel",
+            command_palette: "Command Palette",
+            zoom_in: "Zoom In",
+            zoom_out: "Zoom Out",
+            zoom_reset: "Actual Size",
+            go: "Go",
+            all_notes: "All Notes",
+            archived: "Archived",
+            changes: "Changes",
+            inbox: "Inbox",
+            go_back: "Go Back",
+            go_forward: "Go Forward",
+            note: "Note",
+            toggle_organized: "Toggle Organized",
+            archive_note: "Archive Note",
+            delete_note: "Delete Note",
+            restore_deleted_note: "Restore Deleted Note",
+            open_new_window: "Open in New Window",
+            toggle_raw_editor: "Toggle Raw Editor",
+            toggle_ai_panel: "Toggle AI Panel",
+            toggle_backlinks: "Toggle Backlinks",
+            vault: "Vault",
+            open_vault: "Open Vault…",
+            remove_vault: "Remove Vault from List",
+            restore_getting_started: "Restore Getting Started",
+            add_remote: "Add Remote…",
+            commit_push: "Commit & Push",
+            pull: "Pull from Remote",
+            resolve_conflicts: "Resolve Conflicts",
+            view_changes: "View Pending Changes",
+            install_mcp: "Set Up External AI Tools…",
+            reload: "Reload Vault",
+            repair: "Repair Vault",
+            window: "Window",
+        },
+        MenuLocale::ZhHans => MenuLabels {
+            settings: "设置...",
+            check_updates: "检查更新...",
+            file: "文件",
+            new_note: "新建笔记",
+            new_type: "新建类型",
+            quick_open: "快速打开",
+            quick_open_alias_macos: "快速打开 (Cmd+O)",
+            quick_open_alias_other: "快速打开 (Ctrl+O)",
+            save: "保存",
+            edit: "编辑",
+            find_in_vault: "在知识库中查找",
+            toggle_note_list_search: "切换笔记列表搜索",
+            toggle_diff: "切换差异模式",
+            view: "视图",
+            editor_only: "仅编辑器",
+            editor_list: "编辑器 + 笔记",
+            all_panels: "全部面板",
+            toggle_properties: "切换属性面板",
+            command_palette: "命令面板",
+            zoom_in: "放大",
+            zoom_out: "缩小",
+            zoom_reset: "实际大小",
+            go: "前往",
+            all_notes: "全部笔记",
+            archived: "已归档",
+            changes: "改动",
+            inbox: "收件箱",
+            go_back: "后退",
+            go_forward: "前进",
+            note: "笔记",
+            toggle_organized: "切换已整理",
+            archive_note: "归档笔记",
+            delete_note: "删除笔记",
+            restore_deleted_note: "恢复已删除笔记",
+            open_new_window: "在新窗口打开",
+            toggle_raw_editor: "切换源码编辑器",
+            toggle_ai_panel: "切换 AI 面板",
+            toggle_backlinks: "切换反向链接",
+            vault: "知识库",
+            open_vault: "打开知识库…",
+            remove_vault: "从列表移除知识库",
+            restore_getting_started: "恢复入门示例",
+            add_remote: "添加远程仓库…",
+            commit_push: "提交并推送",
+            pull: "从远端拉取",
+            resolve_conflicts: "解决冲突",
+            view_changes: "查看待处理改动",
+            install_mcp: "设置外部 AI 工具…",
+            reload: "重新加载知识库",
+            repair: "修复知识库",
+            window: "窗口",
+        },
+    }
+}
+
+fn build_app_menu(app: &AppHandle, labels: &MenuLabels) -> MenuResult {
+    let settings_item = MenuItemBuilder::new(labels.settings)
         .id(APP_SETTINGS)
         .accelerator("CmdOrCtrl+,")
         .build(app)?;
-    let check_updates_item = MenuItemBuilder::new("Check for Updates...")
+    let check_updates_item = MenuItemBuilder::new(labels.check_updates)
         .id(APP_CHECK_FOR_UPDATES)
         .build(app)?;
 
@@ -155,20 +339,20 @@ fn build_app_menu(app: &App) -> MenuResult {
         .build()?)
 }
 
-fn build_file_menu(app: &App) -> MenuResult {
+fn build_file_menu(app: &AppHandle, labels: &MenuLabels) -> MenuResult {
     let quick_open_alias_label = if cfg!(target_os = "macos") {
-        "Quick Open (Cmd+O)"
+        labels.quick_open_alias_macos
     } else {
-        "Quick Open (Ctrl+O)"
+        labels.quick_open_alias_other
     };
-    let new_note = MenuItemBuilder::new("New Note")
+    let new_note = MenuItemBuilder::new(labels.new_note)
         .id(FILE_NEW_NOTE)
         .accelerator("CmdOrCtrl+N")
         .build(app)?;
-    let new_type = MenuItemBuilder::new("New Type")
+    let new_type = MenuItemBuilder::new(labels.new_type)
         .id(FILE_NEW_TYPE)
         .build(app)?;
-    let quick_open = MenuItemBuilder::new("Quick Open")
+    let quick_open = MenuItemBuilder::new(labels.quick_open)
         .id(FILE_QUICK_OPEN)
         .accelerator("CmdOrCtrl+P")
         .build(app)?;
@@ -176,11 +360,11 @@ fn build_file_menu(app: &App) -> MenuResult {
         .id(FILE_QUICK_OPEN_ALIAS)
         .accelerator("CmdOrCtrl+O")
         .build(app)?;
-    let save = MenuItemBuilder::new("Save")
+    let save = MenuItemBuilder::new(labels.save)
         .id(FILE_SAVE)
         .accelerator("CmdOrCtrl+S")
         .build(app)?;
-    Ok(SubmenuBuilder::new(app, "File")
+    Ok(SubmenuBuilder::new(app, labels.file)
         .item(&new_note)
         .item(&new_type)
         .item(&quick_open)
@@ -190,21 +374,21 @@ fn build_file_menu(app: &App) -> MenuResult {
         .build()?)
 }
 
-fn build_edit_menu(app: &App) -> MenuResult {
-    let find_in_vault = MenuItemBuilder::new("Find in Vault")
+fn build_edit_menu(app: &AppHandle, labels: &MenuLabels) -> MenuResult {
+    let find_in_vault = MenuItemBuilder::new(labels.find_in_vault)
         .id(EDIT_FIND_IN_VAULT)
         .accelerator("CmdOrCtrl+Shift+F")
         .build(app)?;
-    let toggle_note_list_search = MenuItemBuilder::new("Toggle Note List Search")
+    let toggle_note_list_search = MenuItemBuilder::new(labels.toggle_note_list_search)
         .id(EDIT_TOGGLE_NOTE_LIST_SEARCH)
         .accelerator("CmdOrCtrl+F")
         .enabled(false)
         .build(app)?;
-    let toggle_diff = MenuItemBuilder::new("Toggle Diff Mode")
+    let toggle_diff = MenuItemBuilder::new(labels.toggle_diff)
         .id(EDIT_TOGGLE_DIFF)
         .build(app)?;
 
-    Ok(SubmenuBuilder::new(app, "Edit")
+    Ok(SubmenuBuilder::new(app, labels.edit)
         .undo()
         .redo()
         .separator()
@@ -220,42 +404,42 @@ fn build_edit_menu(app: &App) -> MenuResult {
         .build()?)
 }
 
-fn build_view_menu(app: &App) -> MenuResult {
-    let editor_only = MenuItemBuilder::new("Editor Only")
+fn build_view_menu(app: &AppHandle, labels: &MenuLabels) -> MenuResult {
+    let editor_only = MenuItemBuilder::new(labels.editor_only)
         .id(VIEW_EDITOR_ONLY)
         .accelerator("CmdOrCtrl+1")
         .build(app)?;
-    let editor_list = MenuItemBuilder::new("Editor + Notes")
+    let editor_list = MenuItemBuilder::new(labels.editor_list)
         .id(VIEW_EDITOR_LIST)
         .accelerator("CmdOrCtrl+2")
         .build(app)?;
-    let all_panels = MenuItemBuilder::new("All Panels")
+    let all_panels = MenuItemBuilder::new(labels.all_panels)
         .id(VIEW_ALL)
         .accelerator("CmdOrCtrl+3")
         .build(app)?;
     // Keep Cmd+Shift+I on the renderer path. The menu item stays available,
     // but the native accelerator has proven unreliable for this command.
-    let toggle_properties = MenuItemBuilder::new("Toggle Properties Panel")
+    let toggle_properties = MenuItemBuilder::new(labels.toggle_properties)
         .id(VIEW_TOGGLE_PROPERTIES)
         .build(app)?;
-    let command_palette = MenuItemBuilder::new("Command Palette")
+    let command_palette = MenuItemBuilder::new(labels.command_palette)
         .id(VIEW_COMMAND_PALETTE)
         .accelerator("CmdOrCtrl+K")
         .build(app)?;
-    let zoom_in = MenuItemBuilder::new("Zoom In")
+    let zoom_in = MenuItemBuilder::new(labels.zoom_in)
         .id(VIEW_ZOOM_IN)
         .accelerator("CmdOrCtrl+=")
         .build(app)?;
-    let zoom_out = MenuItemBuilder::new("Zoom Out")
+    let zoom_out = MenuItemBuilder::new(labels.zoom_out)
         .id(VIEW_ZOOM_OUT)
         .accelerator("CmdOrCtrl+-")
         .build(app)?;
-    let zoom_reset = MenuItemBuilder::new("Actual Size")
+    let zoom_reset = MenuItemBuilder::new(labels.zoom_reset)
         .id(VIEW_ZOOM_RESET)
         .accelerator("CmdOrCtrl+0")
         .build(app)?;
 
-    Ok(SubmenuBuilder::new(app, "View")
+    Ok(SubmenuBuilder::new(app, labels.view)
         .item(&editor_only)
         .item(&editor_list)
         .item(&all_panels)
@@ -270,25 +454,27 @@ fn build_view_menu(app: &App) -> MenuResult {
         .build()?)
 }
 
-fn build_go_menu(app: &App) -> MenuResult {
-    let all_notes = MenuItemBuilder::new("All Notes")
+fn build_go_menu(app: &AppHandle, labels: &MenuLabels) -> MenuResult {
+    let all_notes = MenuItemBuilder::new(labels.all_notes)
         .id(GO_ALL_NOTES)
         .build(app)?;
-    let archived = MenuItemBuilder::new("Archived")
+    let archived = MenuItemBuilder::new(labels.archived)
         .id(GO_ARCHIVED)
         .build(app)?;
-    let changes = MenuItemBuilder::new("Changes").id(GO_CHANGES).build(app)?;
-    let inbox = MenuItemBuilder::new("Inbox").id(GO_INBOX).build(app)?;
-    let go_back = MenuItemBuilder::new("Go Back")
+    let changes = MenuItemBuilder::new(labels.changes)
+        .id(GO_CHANGES)
+        .build(app)?;
+    let inbox = MenuItemBuilder::new(labels.inbox).id(GO_INBOX).build(app)?;
+    let go_back = MenuItemBuilder::new(labels.go_back)
         .id(VIEW_GO_BACK)
         .accelerator("CmdOrCtrl+Left")
         .build(app)?;
-    let go_forward = MenuItemBuilder::new("Go Forward")
+    let go_forward = MenuItemBuilder::new(labels.go_forward)
         .id(VIEW_GO_FORWARD)
         .accelerator("CmdOrCtrl+Right")
         .build(app)?;
 
-    Ok(SubmenuBuilder::new(app, "Go")
+    Ok(SubmenuBuilder::new(app, labels.go)
         .item(&all_notes)
         .item(&archived)
         .item(&changes)
@@ -299,39 +485,39 @@ fn build_go_menu(app: &App) -> MenuResult {
         .build()?)
 }
 
-fn build_note_menu(app: &App) -> MenuResult {
-    let toggle_organized = MenuItemBuilder::new("Toggle Organized")
+fn build_note_menu(app: &AppHandle, labels: &MenuLabels) -> MenuResult {
+    let toggle_organized = MenuItemBuilder::new(labels.toggle_organized)
         .id(NOTE_TOGGLE_ORGANIZED)
         .accelerator("CmdOrCtrl+E")
         .build(app)?;
-    let archive_note = MenuItemBuilder::new("Archive Note")
+    let archive_note = MenuItemBuilder::new(labels.archive_note)
         .id(NOTE_ARCHIVE)
         .build(app)?;
-    let delete_note = MenuItemBuilder::new("Delete Note")
+    let delete_note = MenuItemBuilder::new(labels.delete_note)
         .id(NOTE_DELETE)
         .accelerator("CmdOrCtrl+Backspace")
         .build(app)?;
-    let restore_deleted_note = MenuItemBuilder::new("Restore Deleted Note")
+    let restore_deleted_note = MenuItemBuilder::new(labels.restore_deleted_note)
         .id(NOTE_RESTORE_DELETED)
         .enabled(false)
         .build(app)?;
-    let open_new_window = MenuItemBuilder::new("Open in New Window")
+    let open_new_window = MenuItemBuilder::new(labels.open_new_window)
         .id(NOTE_OPEN_IN_NEW_WINDOW)
         .accelerator("CmdOrCtrl+Shift+O")
         .build(app)?;
-    let toggle_raw_editor = MenuItemBuilder::new("Toggle Raw Editor")
+    let toggle_raw_editor = MenuItemBuilder::new(labels.toggle_raw_editor)
         .id(EDIT_TOGGLE_RAW_EDITOR)
         .accelerator("CmdOrCtrl+\\")
         .build(app)?;
-    let toggle_ai_chat = MenuItemBuilder::new("Toggle AI Panel")
+    let toggle_ai_chat = MenuItemBuilder::new(labels.toggle_ai_panel)
         .id(VIEW_TOGGLE_AI_CHAT)
         .accelerator("CmdOrCtrl+Shift+L")
         .build(app)?;
-    let toggle_backlinks = MenuItemBuilder::new("Toggle Backlinks")
+    let toggle_backlinks = MenuItemBuilder::new(labels.toggle_backlinks)
         .id(VIEW_TOGGLE_BACKLINKS)
         .build(app)?;
 
-    Ok(SubmenuBuilder::new(app, "Note")
+    Ok(SubmenuBuilder::new(app, labels.note)
         .item(&toggle_organized)
         .item(&archive_note)
         .item(&delete_note)
@@ -345,44 +531,44 @@ fn build_note_menu(app: &App) -> MenuResult {
         .build()?)
 }
 
-fn build_vault_menu(app: &App) -> MenuResult {
-    let open_vault = MenuItemBuilder::new("Open Vault…")
+fn build_vault_menu(app: &AppHandle, labels: &MenuLabels) -> MenuResult {
+    let open_vault = MenuItemBuilder::new(labels.open_vault)
         .id(VAULT_OPEN)
         .build(app)?;
-    let remove_vault = MenuItemBuilder::new("Remove Vault from List")
+    let remove_vault = MenuItemBuilder::new(labels.remove_vault)
         .id(VAULT_REMOVE)
         .build(app)?;
-    let restore_getting_started = MenuItemBuilder::new("Restore Getting Started")
+    let restore_getting_started = MenuItemBuilder::new(labels.restore_getting_started)
         .id(VAULT_RESTORE_GETTING_STARTED)
         .build(app)?;
-    let add_remote = MenuItemBuilder::new("Add Remote…")
+    let add_remote = MenuItemBuilder::new(labels.add_remote)
         .id(VAULT_ADD_REMOTE)
         .enabled(false)
         .build(app)?;
-    let commit_push = MenuItemBuilder::new("Commit & Push")
+    let commit_push = MenuItemBuilder::new(labels.commit_push)
         .id(VAULT_COMMIT_PUSH)
         .build(app)?;
-    let pull = MenuItemBuilder::new("Pull from Remote")
+    let pull = MenuItemBuilder::new(labels.pull)
         .id(VAULT_PULL)
         .build(app)?;
-    let resolve_conflicts = MenuItemBuilder::new("Resolve Conflicts")
+    let resolve_conflicts = MenuItemBuilder::new(labels.resolve_conflicts)
         .id(VAULT_RESOLVE_CONFLICTS)
         .enabled(false)
         .build(app)?;
-    let view_changes = MenuItemBuilder::new("View Pending Changes")
+    let view_changes = MenuItemBuilder::new(labels.view_changes)
         .id(VAULT_VIEW_CHANGES)
         .build(app)?;
-    let install_mcp = MenuItemBuilder::new("Set Up External AI Tools…")
+    let install_mcp = MenuItemBuilder::new(labels.install_mcp)
         .id(VAULT_INSTALL_MCP)
         .build(app)?;
-    let reload = MenuItemBuilder::new("Reload Vault")
+    let reload = MenuItemBuilder::new(labels.reload)
         .id(VAULT_RELOAD)
         .build(app)?;
-    let repair = MenuItemBuilder::new("Repair Vault")
+    let repair = MenuItemBuilder::new(labels.repair)
         .id(VAULT_REPAIR)
         .build(app)?;
 
-    Ok(SubmenuBuilder::new(app, "Vault")
+    Ok(SubmenuBuilder::new(app, labels.vault)
         .item(&open_vault)
         .item(&remove_vault)
         .item(&restore_getting_started)
@@ -399,8 +585,8 @@ fn build_vault_menu(app: &App) -> MenuResult {
         .build()?)
 }
 
-fn build_window_menu(app: &App) -> MenuResult {
-    Ok(SubmenuBuilder::new(app, "Window")
+fn build_window_menu(app: &AppHandle, labels: &MenuLabels) -> MenuResult {
+    Ok(SubmenuBuilder::new(app, labels.window)
         .minimize()
         .maximize()
         .separator()
@@ -409,14 +595,29 @@ fn build_window_menu(app: &App) -> MenuResult {
 }
 
 pub fn setup_menu(app: &App) -> Result<(), Box<dyn std::error::Error>> {
-    let app_menu = build_app_menu(app)?;
-    let file_menu = build_file_menu(app)?;
-    let edit_menu = build_edit_menu(app)?;
-    let view_menu = build_view_menu(app)?;
-    let go_menu = build_go_menu(app)?;
-    let note_menu = build_note_menu(app)?;
-    let vault_menu = build_vault_menu(app)?;
-    let window_menu = build_window_menu(app)?;
+    set_menu_locale(&app.handle(), None)?;
+
+    app.on_menu_event(|app_handle, event| {
+        let id = event.id().0.as_str();
+        let _ = emit_custom_menu_event(app_handle, id);
+    });
+
+    Ok(())
+}
+
+pub fn set_menu_locale(
+    app: &AppHandle,
+    locale: Option<&str>,
+) -> Result<(), Box<dyn std::error::Error>> {
+    let labels = menu_labels(MenuLocale::from_input(locale));
+    let app_menu = build_app_menu(app, &labels)?;
+    let file_menu = build_file_menu(app, &labels)?;
+    let edit_menu = build_edit_menu(app, &labels)?;
+    let view_menu = build_view_menu(app, &labels)?;
+    let go_menu = build_go_menu(app, &labels)?;
+    let note_menu = build_note_menu(app, &labels)?;
+    let vault_menu = build_vault_menu(app, &labels)?;
+    let window_menu = build_window_menu(app, &labels)?;
 
     let menu = MenuBuilder::new(app)
         .item(&app_menu)
@@ -430,11 +631,6 @@ pub fn setup_menu(app: &App) -> Result<(), Box<dyn std::error::Error>> {
         .build()?;
 
     app.set_menu(menu)?;
-
-    app.on_menu_event(|app_handle, event| {
-        let id = event.id().0.as_str();
-        let _ = emit_custom_menu_event(app_handle, id);
-    });
 
     Ok(())
 }

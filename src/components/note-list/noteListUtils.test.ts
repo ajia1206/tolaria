@@ -1,6 +1,10 @@
 import { describe, it, expect, vi } from 'vitest'
 import { resolveHeaderTitle, routeNoteClick, type ClickActions } from './noteListUtils'
 import type { SidebarSelection, VaultEntry } from '../../types'
+import { translate } from '../../lib/i18nShared'
+import type { TranslationKey } from '../../lib/i18nMessages'
+
+const t = (key: TranslationKey) => translate('en', key)
 
 function makeEntry(path = '/test.md'): VaultEntry {
   return {
@@ -35,7 +39,7 @@ function makeMouseEvent(overrides: Partial<React.MouseEvent> = {}): React.MouseE
 describe('resolveHeaderTitle', () => {
   it('returns History for the pulse filter', () => {
     const selection: SidebarSelection = { kind: 'filter', filter: 'pulse' }
-    expect(resolveHeaderTitle(selection, null)).toBe('History')
+    expect(resolveHeaderTitle(selection, null, t)).toBe('History')
   })
 })
 

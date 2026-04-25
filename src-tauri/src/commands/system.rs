@@ -162,6 +162,7 @@ pub struct MenuStateUpdate {
     has_restorable_deleted_note: Option<bool>,
     has_no_remote: Option<bool>,
     note_list_search_enabled: Option<bool>,
+    locale: Option<String>,
 }
 
 #[cfg(desktop)]
@@ -170,6 +171,10 @@ pub fn update_menu_state(
     app_handle: tauri::AppHandle,
     state: MenuStateUpdate,
 ) -> Result<(), String> {
+    if let Some(locale) = state.locale.as_deref() {
+        menu::set_menu_locale(&app_handle, Some(locale))
+            .map_err(|err| format!("Failed to update menu locale: {err}"))?;
+    }
     menu::set_note_items_enabled(&app_handle, state.has_active_note);
     if let Some(v) = state.has_modified_files {
         menu::set_git_commit_items_enabled(&app_handle, v);

@@ -7,6 +7,7 @@ import { getTypeColor, buildTypeEntryMap } from '../utils/typeColors'
 import { formatSearchSubtitle } from '../utils/noteListHelpers'
 import { getTypeIcon } from './NoteItem'
 import { NoteTitleIcon } from './NoteTitleIcon'
+import { useI18n } from '../lib/useI18n'
 
 interface SearchPanelProps {
   open: boolean
@@ -17,6 +18,7 @@ interface SearchPanelProps {
 }
 
 export function SearchPanel({ open, vaultPath, entries, onSelectNote, onClose }: SearchPanelProps) {
+  const { t } = useI18n()
   const {
     query, setQuery, results, selectedIndex, setSelectedIndex, loading, elapsedMs,
   } = useUnifiedSearch(vaultPath, open)
@@ -95,6 +97,7 @@ export function SearchPanel({ open, vaultPath, entries, onSelectNote, onClose }:
           ref={inputRef}
           query={query}
           loading={loading}
+          placeholder={t('search.placeholder')}
           onChange={setQuery}
           onKeyDown={handleKeyDown}
         />
@@ -120,12 +123,13 @@ import { forwardRef } from 'react'
 interface SearchInputProps {
   query: string
   loading: boolean
+  placeholder: string
   onChange: (value: string) => void
   onKeyDown?: React.KeyboardEventHandler<HTMLInputElement>
 }
 
 const SearchInput = forwardRef<HTMLInputElement, SearchInputProps>(
-  function SearchInput({ query, loading, onChange, onKeyDown }, ref) {
+  function SearchInput({ query, loading, placeholder, onChange, onKeyDown }, ref) {
     return (
       <div className="flex items-center gap-3 border-b border-border px-4 py-3">
         <svg className="h-4 w-4 shrink-0 text-muted-foreground" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
@@ -136,7 +140,7 @@ const SearchInput = forwardRef<HTMLInputElement, SearchInputProps>(
           ref={ref}
           className="flex-1 bg-transparent text-[15px] text-foreground outline-none placeholder:text-muted-foreground"
           type="text"
-          placeholder="Search in all notes..."
+          placeholder={placeholder}
           value={query}
           onChange={e => onChange(e.target.value)}
           onKeyDown={onKeyDown}
@@ -173,26 +177,27 @@ interface SearchContentProps {
 function SearchContent({
   query, results, selectedIndex, loading, elapsedMs, entryLookup, typeEntryMap, listRef, onSelect, onHover,
 }: SearchContentProps) {
+  const { t } = useI18n()
   return (
     <div className="flex-1 overflow-y-auto">
       {!query.trim() && (
         <div className="px-4 py-8 text-center">
-          <p className="text-[13px] text-muted-foreground">Search across all note contents</p>
+          <p className="text-[13px] text-muted-foreground">{t('search.emptyPrompt')}</p>
           <p className="mt-1 text-[11px] text-muted-foreground/60">
-            Enter to open · Esc to close
+            {t('search.hints')}
           </p>
         </div>
       )}
 
       {query.trim() && results.length === 0 && loading && (
         <div className="px-4 py-8 text-center text-[13px] text-muted-foreground">
-          Searching...
+          {t('search.loading')}
         </div>
       )}
 
       {query.trim() && results.length === 0 && !loading && (
         <div className="px-4 py-8 text-center">
-          <p className="text-[13px] text-muted-foreground">No results found</p>
+          <p className="text-[13px] text-muted-foreground">{t('search.noResults')}</p>
         </div>
       )}
 
@@ -200,7 +205,11 @@ function SearchContent({
         <>
           <div className="border-b border-border/50 px-4 py-1.5">
             <span className="text-[11px] text-muted-foreground">
-              {results.length} result{results.length !== 1 ? 's' : ''}{elapsedMs !== null ? ` · ${elapsedMs}ms` : ''}
+              {t('search.results', {
+                count: results.length,
+                suffix: results.length !== 1 ? 's' : '',
+                elapsed: elapsedMs !== null ? ` · ${elapsedMs}ms` : '',
+              })}
             </span>
           </div>
           <div ref={listRef}>

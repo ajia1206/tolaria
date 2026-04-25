@@ -23,6 +23,7 @@ import {
 import { useRawModeWithFlush } from './useRawModeWithFlush'
 import { createArrowLigaturesExtension } from './arrowLigaturesExtension'
 import { useFilenameAutolinkGuard } from './useFilenameAutolinkGuard'
+import { useI18n } from '../lib/useI18n'
 import './Editor.css'
 import './EditorTheme.css'
 
@@ -128,6 +129,7 @@ function useEditorModeExclusion({
 function EditorEmptyState() {
   const breadcrumbBarHeight = 52
   const { onMouseDown } = useDragRegion()
+  const { t } = useI18n()
   const quickOpenShortcut = formatShortcutDisplay({ display: '⌘P / ⌘O' })
   const newNoteShortcut = formatShortcutDisplay({ display: '⌘N' })
 
@@ -142,8 +144,10 @@ function EditorEmptyState() {
         style={{ height: breadcrumbBarHeight }}
       />
       <div className="flex flex-1 flex-col items-center justify-center gap-2 text-center text-muted-foreground">
-        <p className="m-0 text-[15px]">Select a note to start editing</p>
-        <span className="text-xs text-muted-foreground">{quickOpenShortcut} to search &middot; {newNoteShortcut} to create</span>
+        <p className="m-0 text-[15px]">{t('editor.emptyTitle')}</p>
+        <span className="text-xs text-muted-foreground">
+          {t('editor.emptySearchHint', { shortcut: quickOpenShortcut })} &middot; {t('editor.emptyCreateHint', { shortcut: newNoteShortcut })}
+        </span>
       </div>
     </div>
   )

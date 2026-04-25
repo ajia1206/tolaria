@@ -11,6 +11,8 @@ import { Button } from '@/components/ui/button'
 import { cn } from '@/lib/utils'
 import type { FolderNode } from '../../types'
 import { useFolderRowInteractions } from './useFolderRowInteractions'
+import { useI18n } from '../../lib/useI18n'
+import { translateVaultDisplayText } from '../../lib/vaultDisplay'
 
 interface FolderItemRowProps {
   contentInset: number
@@ -37,8 +39,10 @@ export function FolderItemRow({
   onStartRenameFolder,
   onToggle,
 }: FolderItemRowProps) {
+  const { locale, t } = useI18n()
   const hasChildren = node.children.length > 0
-  const expandLabel = isExpanded ? `Collapse ${node.name}` : `Expand ${node.name}`
+  const displayName = translateVaultDisplayText(locale, node.name)
+  const expandLabel = isExpanded ? `Collapse ${displayName}` : `Expand ${displayName}`
   const hasActions = !!onStartRenameFolder || !!onDeleteFolder
   const { handleRenameDoubleClick, handleSelectClick } = useFolderRowInteractions({
     hasChildren,
@@ -74,6 +78,7 @@ export function FolderItemRow({
         isExpanded={isExpanded}
         isSelected={isSelected}
         node={node}
+        displayName={displayName}
         onClick={handleSelectClick}
         onDoubleClick={handleRenameDoubleClick}
       />
@@ -81,9 +86,9 @@ export function FolderItemRow({
         <div className="pointer-events-none absolute right-2 top-1/2 flex -translate-y-1/2 items-center gap-0.5 opacity-0 transition-opacity group-hover:pointer-events-auto group-hover:opacity-100 group-focus-within:pointer-events-auto group-focus-within:opacity-100">
           {onStartRenameFolder && (
             <FolderActionButton
-              ariaLabel={`Rename ${node.name}`}
+              ariaLabel={`Rename ${displayName}`}
               testId={`rename-folder-btn:${node.path}`}
-              title="Rename folder"
+              title={t('sidebar.renameFolder')}
               onClick={() => {
                 onSelect()
                 onStartRenameFolder(node.path)
@@ -94,9 +99,9 @@ export function FolderItemRow({
           )}
           {onDeleteFolder && (
             <FolderActionButton
-              ariaLabel={`Delete ${node.name}`}
+              ariaLabel={`Delete ${displayName}`}
               testId={`delete-folder-btn:${node.path}`}
-              title="Delete folder"
+              title={t('sidebar.deleteFolder')}
               destructive
               onClick={() => {
                 onSelect()
@@ -181,6 +186,7 @@ function FolderActionButton({
 
 function FolderSelectButton({
   contentInset,
+  displayName,
   hasActions,
   hasChildren,
   isExpanded,
@@ -190,6 +196,7 @@ function FolderSelectButton({
   onDoubleClick,
 }: {
   contentInset: number
+  displayName: string
   hasActions: boolean
   hasChildren: boolean
   isExpanded: boolean
@@ -222,7 +229,7 @@ function FolderSelectButton({
       ) : (
         <Folder size={17} className="size-[17px] shrink-0" />
       )}
-      <span className="truncate">{node.name}</span>
+      <span className="truncate">{displayName}</span>
     </Button>
   )
 }

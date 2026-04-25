@@ -1,6 +1,7 @@
 import type { RefObject } from 'react'
 import { PencilSimple, Trash } from '@phosphor-icons/react'
 import { Button } from '@/components/ui/button'
+import { useI18n } from '../../lib/useI18n'
 
 export interface FolderContextMenuState {
   path: string
@@ -21,6 +22,8 @@ export function FolderContextMenu({
   onDelete,
   onRename,
 }: FolderContextMenuProps) {
+  const { t } = useI18n()
+
   if (!menu) return null
 
   return (
@@ -37,7 +40,7 @@ export function FolderContextMenu({
         onClick={() => onRename(menu.path)}
       >
         <PencilSimple size={14} />
-        Rename folder…
+        {t('sidebar.renameFolder')}
       </Button>
       <Button
         type="button"
@@ -47,7 +50,7 @@ export function FolderContextMenu({
         data-testid="delete-folder-menu-item"
       >
         <Trash size={14} />
-        Delete folder…
+        {t('sidebar.deleteFolder')}
       </Button>
     </div>
   )

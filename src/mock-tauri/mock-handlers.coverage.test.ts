@@ -167,6 +167,7 @@ describe('mockHandlers coverage', () => {
       analytics_enabled: true,
       anonymous_id: 'anon-1',
       release_channel: 'alpha',
+      ui_language: null,
       theme_mode: null,
       default_ai_agent: 'codex',
     })

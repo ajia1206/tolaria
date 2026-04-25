@@ -1,4 +1,5 @@
 import { memo } from 'react'
+import { useI18n } from '../../lib/useI18n'
 import type { NoteListFilter } from '../../utils/noteListHelpers'
 
 interface FilterPillsProps {
@@ -8,14 +9,15 @@ interface FilterPillsProps {
   position?: 'top' | 'bottom'
 }
 
-const PILLS: { value: NoteListFilter; label: string }[] = [
-  { value: 'open', label: 'Open' },
-  { value: 'archived', label: 'Archived' },
+const PILLS: { value: NoteListFilter; labelKey: 'noteList.filter.open' | 'noteList.filter.archived' }[] = [
+  { value: 'open', labelKey: 'noteList.filter.open' },
+  { value: 'archived', labelKey: 'noteList.filter.archived' },
 ]
 
 const BOTTOM_GRADIENT = 'linear-gradient(to bottom, transparent 0%, var(--card) 30%, var(--card) 100%)'
 
 function FilterPillsInner({ active, counts, onChange, position = 'top' }: FilterPillsProps) {
+  const { t } = useI18n()
   const isBottom = position === 'bottom'
   return (
     <div
@@ -25,7 +27,7 @@ function FilterPillsInner({ active, counts, onChange, position = 'top' }: Filter
       style={isBottom ? { background: BOTTOM_GRADIENT } : undefined}
       data-testid="filter-pills"
     >
-      {PILLS.map(({ value, label }) => (
+      {PILLS.map(({ value, labelKey }) => (
         <button
           key={value}
           type="button"
@@ -39,7 +41,7 @@ function FilterPillsInner({ active, counts, onChange, position = 'top' }: Filter
           onClick={() => onChange(value)}
           data-testid={`filter-pill-${value}`}
         >
-          {label}
+          {t(labelKey)}
           <span className={`text-[10px] tabular-nums ${active === value ? 'text-foreground/70' : 'text-muted-foreground/70'}`}>
             {counts[value]}
           </span>

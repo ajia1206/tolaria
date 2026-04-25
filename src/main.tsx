@@ -5,6 +5,7 @@ import { TooltipProvider } from '@/components/ui/tooltip'
 import './index.css'
 import App from './App.tsx'
 import { LinuxTitlebar } from './components/LinuxTitlebar'
+import { AppI18nProvider } from './lib/i18n'
 import { applyStoredThemeMode } from './lib/themeMode'
 import {
   APP_COMMAND_EVENT_NAME,
@@ -122,8 +123,10 @@ createRoot(document.getElementById('root')!, {
 }).render(
   <StrictMode>
     <TooltipProvider>
-      <LinuxTitlebar />
-      <App />
+      <AppI18nProvider>
+        <LinuxTitlebar />
+        <App />
+      </AppI18nProvider>
     </TooltipProvider>
   </StrictMode>,
 )

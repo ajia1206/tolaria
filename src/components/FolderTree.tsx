@@ -13,6 +13,7 @@ import { FolderTreeRow } from './folder-tree/FolderTreeRow'
 import { useFolderContextMenu } from './folder-tree/useFolderContextMenu'
 import { useFolderTreeDisclosure } from './folder-tree/useFolderTreeDisclosure'
 import { SidebarGroupHeader } from './sidebar/SidebarGroupHeader'
+import { useI18n } from '../lib/useI18n'
 
 interface FolderTreeProps {
   folders: FolderNode[]
@@ -41,6 +42,7 @@ export const FolderTree = memo(function FolderTree({
   collapsed: externalCollapsed,
   onToggle,
 }: FolderTreeProps) {
+  const { t } = useI18n()
   const {
     closeCreateForm,
     expanded,
@@ -83,7 +85,7 @@ export const FolderTree = memo(function FolderTree({
 
   return (
     <div className="border-b border-border" style={{ padding: '0 6px' }}>
-      <SidebarGroupHeader label="FOLDERS" collapsed={sectionCollapsed} onToggle={handleToggleSection}>
+      <SidebarGroupHeader label={t('sidebar.folders').toUpperCase()} collapsed={sectionCollapsed} onToggle={handleToggleSection}>
         {onCreateFolder && (
           <Button
             type="button"
@@ -91,8 +93,8 @@ export const FolderTree = memo(function FolderTree({
             size="icon-xs"
             className="h-auto w-auto min-w-0 rounded-none p-0 text-muted-foreground hover:bg-transparent hover:text-foreground"
             data-testid="create-folder-btn"
-            title="Create folder"
-            aria-label="Create folder"
+            title={t('sidebar.createFolder')}
+            aria-label={t('sidebar.createFolder')}
             onClick={(event) => {
               event.stopPropagation()
               closeContextMenu()
@@ -125,9 +127,9 @@ export const FolderTree = memo(function FolderTree({
           {isCreating && (
             <div style={{ paddingLeft: 8 }}>
               <FolderNameInput
-                ariaLabel="New folder name"
+                ariaLabel={t('sidebar.newFolderName')}
                 initialValue=""
-                placeholder="Folder name"
+                placeholder={t('sidebar.folderName')}
                 submitOnBlur={true}
                 testId="new-folder-input"
                 onCancel={closeCreateForm}

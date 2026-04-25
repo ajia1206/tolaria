@@ -3,6 +3,7 @@ import { Download, ExternalLink, RefreshCw, X } from 'lucide-react'
 import type { UpdateStatus, UpdateActions } from '../hooks/useUpdater'
 import { restartApp } from '../hooks/useUpdater'
 import { Button } from './ui/button'
+import { useI18n } from '../lib/useI18n'
 
 interface UpdateBannerProps {
   status: UpdateStatus
@@ -62,12 +63,16 @@ const readyIconStyle = {
   flexShrink: 0,
 } satisfies CSSProperties
 
-function renderAvailableContent(status: Extract<VisibleUpdateStatus, { state: 'available' }>, actions: UpdateActions) {
+function renderAvailableContent(
+  status: Extract<VisibleUpdateStatus, { state: 'available' }>,
+  actions: UpdateActions,
+  t: ReturnType<typeof useI18n>['t'],
+) {
   return (
     <>
       <Download size={14} style={iconStyle} />
       <span>
-        <strong>Tolaria {status.displayVersion}</strong> is available
+        <strong>{t('update.available', { version: status.displayVersion })}</strong>
       </span>
       <Button
         type="button"
@@ -77,7 +82,7 @@ function renderAvailableContent(status: Extract<VisibleUpdateStatus, { state: 'a
         onClick={actions.openReleaseNotes}
         style={{ color: 'var(--text-inverse)', padding: 0, height: 'auto' }}
       >
-        Release Notes <ExternalLink size={11} />
+        {t('update.releaseNotes')} <ExternalLink size={11} />
       </Button>
       <Button
         type="button"
@@ -86,7 +91,7 @@ function renderAvailableContent(status: Extract<VisibleUpdateStatus, { state: 'a
         onClick={actions.startDownload}
         style={primaryActionStyle}
       >
-        Update Now
+        {t('update.now')}
       </Button>
       <Button
         type="button"
@@ -95,7 +100,7 @@ function renderAvailableContent(status: Extract<VisibleUpdateStatus, { state: 'a
         data-testid="update-dismiss"
         onClick={actions.dismiss}
         style={dismissButtonStyle}
-        aria-label="Dismiss"
+        aria-label={t('update.dismiss')}
       >
         <X size={14} />
       </Button>
@@ -103,11 +108,14 @@ function renderAvailableContent(status: Extract<VisibleUpdateStatus, { state: 'a
   )
 }
 
-function renderDownloadingContent(status: Extract<VisibleUpdateStatus, { state: 'downloading' }>) {
+function renderDownloadingContent(
+  status: Extract<VisibleUpdateStatus, { state: 'downloading' }>,
+  t: ReturnType<typeof useI18n>['t'],
+) {
   return (
     <>
       <RefreshCw size={14} style={{ ...iconStyle, animation: 'spin 1s linear infinite' }} />
-      <span>Downloading Tolaria {status.displayVersion}...</span>
+      <span>{t('update.downloading', { version: status.displayVersion })}</span>
       <div style={progressTrackStyle}>
         <div
           data-testid="update-progress"
@@ -125,12 +133,15 @@ function renderDownloadingContent(status: Extract<VisibleUpdateStatus, { state: 
   )
 }
 
-function renderReadyContent(status: Extract<VisibleUpdateStatus, { state: 'ready' }>) {
+function renderReadyContent(
+  status: Extract<VisibleUpdateStatus, { state: 'ready' }>,
+  t: ReturnType<typeof useI18n>['t'],
+) {
   return (
     <>
       <RefreshCw size={14} style={readyIconStyle} />
       <span>
-        <strong>Tolaria {status.displayVersion}</strong> is ready - restart to apply
+        <strong>{t('update.ready', { version: status.displayVersion })}</strong>
       </span>
       <Button
         type="button"
@@ -143,25 +154,26 @@ function renderReadyContent(status: Extract<VisibleUpdateStatus, { state: 'ready
           color: 'var(--text-inverse)',
         }}
       >
-        Restart Now
+        {t('update.restartNow')}
       </Button>
     </>
   )
 }
 
-function renderBannerContent(status: VisibleUpdateStatus, actions: UpdateActions) {
+function renderBannerContent(status: VisibleUpdateStatus, actions: UpdateActions, t: ReturnType<typeof useI18n>['t']) {
   switch (status.state) {
     case 'available':
-      return renderAvailableContent(status, actions)
+      return renderAvailableContent(status, actions, t)
     case 'downloading':
-      return renderDownloadingContent(status)
+      return renderDownloadingContent(status, t)
     case 'ready':
-      return renderReadyContent(status)
+      return renderReadyContent(status, t)
   }
 }
 
 export function UpdateBanner({ status, actions }: UpdateBannerProps) {
+  const { t } = useI18n()
   if (status.state === 'idle' || status.state === 'error') return null
 
-  return <div data-testid="update-banner" style={bannerStyle}>{renderBannerContent(status, actions)}</div>
+  return <div data-testid="update-banner" style={bannerStyle}>{renderBannerContent(status, actions, t)}</div>
 }

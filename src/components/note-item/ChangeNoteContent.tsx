@@ -1,6 +1,8 @@
 import { cn } from '@/lib/utils'
 import type { VaultEntry } from '../../types'
 import { NoteTitleIcon } from '../NoteTitleIcon'
+import { useI18n } from '../../lib/useI18n'
+import { translateVaultDisplayText } from '../../lib/vaultDisplay'
 
 type ChangeStatus = 'modified' | 'added' | 'deleted' | 'untracked' | 'renamed'
 
@@ -127,6 +129,8 @@ export function ChangeNoteContent({
   isSelected: boolean
   isDeletedChange: boolean
 }) {
+  const { locale } = useI18n()
+
   return (
     <>
       <ChangeStatusIcon status={changeStatus} />
@@ -141,7 +145,7 @@ export function ChangeNoteContent({
             data-testid="change-note-title"
           >
             <NoteTitleIcon icon={entry.icon} size={15} className="mr-1" testId="change-note-icon" />
-            {entry.title}
+            {translateVaultDisplayText(locale, entry.title)}
           </div>
           <div
             className={cn('truncate text-[12px] leading-[1.5] text-muted-foreground', isDeletedChange && 'opacity-70')}

@@ -29,6 +29,8 @@ import {
 } from './noteListHooks'
 import { useChangesContextMenu } from './NoteListChangesMenu'
 import { addNoteListSearchToggleListener, dispatchNoteListSearchAvailability } from '../../utils/noteListSearchEvents'
+import { useI18n } from '../../lib/useI18n'
+import { translateVaultDisplayText } from '../../lib/vaultDisplay'
 
 type EntitySelection = Extract<SidebarSelection, { kind: 'entity' }>
 
@@ -439,6 +441,8 @@ function buildNoteListLayoutModel(params: {
   filterCounts: ReturnType<typeof useFilterCounts>
   onNoteListFilterChange: (filter: NoteListFilter) => void
   onOpenType: (entry: VaultEntry) => void
+  t: ReturnType<typeof useI18n>['t']
+  locale: ReturnType<typeof useI18n>['locale']
   content: ReturnType<typeof useNoteListContent> & {
     handleSearchKeyDown: (event: React.KeyboardEvent<HTMLInputElement>) => void
   }
@@ -448,7 +452,7 @@ function buildNoteListLayoutModel(params: {
   }
 }) {
   return {
-    title: resolveHeaderTitle(params.selection, params.content.typeDocument, params.views),
+    title: translateVaultDisplayText(params.locale, resolveHeaderTitle(params.selection, params.content.typeDocument, params.t, params.views)),
     typeDocument: params.content.typeDocument,
     isEntityView: params.content.isEntityView,
     listSort: params.content.listSort,
@@ -532,6 +536,7 @@ export function useNoteListModel({
   views,
   visibleNotesRef,
 }: NoteListProps) {
+  const { locale, t } = useI18n()
   const selectedNotePath = selectedNote?.path ?? null
   const { modifiedPathSet, modifiedSuffixes, resolvedGetNoteStatus } = useModifiedFilesState(modifiedFiles, getNoteStatus)
   const { isInboxView } = useViewFlags(selection)
@@ -622,6 +627,8 @@ export function useNoteListModel({
     views,
     sidebarCollapsed,
     onOpenType: onReplaceActiveTab,
+    t,
+    locale,
     modifiedFilesError,
     noteListFilter,
     filterCounts,

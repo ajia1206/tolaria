@@ -17,6 +17,7 @@ pub struct Settings {
     pub analytics_enabled: Option<bool>,
     pub anonymous_id: Option<String>,
     pub release_channel: Option<String>,
+    pub ui_language: Option<String>,
     pub theme_mode: Option<String>,
     pub initial_h1_auto_rename_enabled: Option<bool>,
     pub default_ai_agent: Option<String>,
@@ -61,6 +62,18 @@ pub fn normalize_theme_mode(value: Option<&str>) -> Option<String> {
     }
 }
 
+pub fn normalize_ui_language(value: Option<&str>) -> Option<String> {
+    match value.map(|candidate| candidate.trim().to_ascii_lowercase()) {
+        Some(language) if language == "en" || language.starts_with("en-") => Some("en".to_string()),
+        Some(language)
+            if language == "zh" || language == "zh-hans" || language.starts_with("zh-") =>
+        {
+            Some("zh-Hans".to_string())
+        }
+        _ => None,
+    }
+}
+
 fn normalize_settings(settings: Settings) -> Settings {
     Settings {
         auto_pull_interval_minutes: settings.auto_pull_interval_minutes,
@@ -77,6 +90,7 @@ fn normalize_settings(settings: Settings) -> Settings {
         analytics_enabled: settings.analytics_enabled,
         anonymous_id: normalize_optional_string(settings.anonymous_id),
         release_channel: normalize_release_channel(settings.release_channel.as_deref()),
+        ui_language: normalize_ui_language(settings.ui_language.as_deref()),
         theme_mode: normalize_theme_mode(settings.theme_mode.as_deref()),
         initial_h1_auto_rename_enabled: settings.initial_h1_auto_rename_enabled,
         default_ai_agent: normalize_default_ai_agent(settings.default_ai_agent.as_deref()),
@@ -218,6 +232,7 @@ mod tests {
             analytics_enabled: Some(false),
             anonymous_id: Some("abc-123-uuid".to_string()),
             release_channel: Some("alpha".to_string()),
+            ui_language: Some("zh-Hans".to_string()),
             theme_mode: Some("dark".to_string()),
             initial_h1_auto_rename_enabled: Some(false),
             default_ai_agent: Some("codex".to_string()),
@@ -244,6 +259,7 @@ mod tests {
             autogit_inactive_threshold_seconds: Some(30),
             auto_advance_inbox_after_organize: Some(true),
             release_channel: Some("alpha".to_string()),
+            ui_language: Some("zh-Hans".to_string()),
             theme_mode: Some("dark".to_string()),
             initial_h1_auto_rename_enabled: Some(false),
             default_ai_agent: Some("codex".to_string()),
@@ -255,6 +271,7 @@ mod tests {
         assert_eq!(loaded.autogit_inactive_threshold_seconds, Some(30));
         assert_eq!(loaded.auto_advance_inbox_after_organize, Some(true));
         assert_eq!(loaded.release_channel.as_deref(), Some("alpha"));
+        assert_eq!(loaded.ui_language.as_deref(), Some("zh-Hans"));
         assert_eq!(loaded.theme_mode.as_deref(), Some("dark"));
         assert_eq!(loaded.initial_h1_auto_rename_enabled, Some(false));
         assert_eq!(loaded.default_ai_agent.as_deref(), Some("codex"));
@@ -456,5 +473,16 @@ mod tests {
         let (_dir, path) = create_last_vault_path(&["last-vault.txt"]);
         write_and_assert_last_vault(&path, "/Users/test/OldVault");
         write_and_assert_last_vault(&path, "/Users/test/NewVault");
+    }
+
+    #[test]
+    fn test_normalize_ui_language() {
+        assert_eq!(normalize_ui_language(Some("en-US")).as_deref(), Some("en"));
+        assert_eq!(
+            normalize_ui_language(Some("zh-CN")).as_deref(),
+            Some("zh-Hans")
+        );
+        assert_eq!(normalize_ui_language(Some("fr-FR")), None);
+        assert_eq!(normalize_ui_language(Some("")), None);
     }
 }

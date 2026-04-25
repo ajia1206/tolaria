@@ -21,6 +21,8 @@ import {
 import { NoteTitleIcon } from './NoteTitleIcon'
 import { slugify } from '../hooks/useNoteCreation'
 import { useDragRegion } from '../hooks/useDragRegion'
+import { useI18n } from '../lib/useI18n'
+import { translateVaultDisplayText } from '../lib/vaultDisplay'
 
 interface BreadcrumbBarProps {
   entry: VaultEntry
@@ -531,7 +533,8 @@ function BreadcrumbTitle({
   entry,
   onRenameFilename,
 }: Pick<BreadcrumbBarProps, 'entry' | 'onRenameFilename'>) {
-  const typeLabel = entry.isA ?? 'Note'
+  const { locale } = useI18n()
+  const typeLabel = translateVaultDisplayText(locale, entry.isA ?? 'Note')
   return (
     <div className="flex items-center gap-1.5 min-w-0 text-sm text-muted-foreground">
       <span className="shrink-0">{typeLabel}</span>

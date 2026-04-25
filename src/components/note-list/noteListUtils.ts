@@ -1,6 +1,7 @@
 import type { VaultEntry, SidebarSelection, ModifiedFile, NoteStatus, ViewFile } from '../../types'
 import type { RelationshipGroup } from '../../utils/noteListHelpers'
 import { filenameStemToTitle } from '../../utils/noteTitle'
+import type { TranslationKey } from '../../lib/i18nMessages'
 
 export interface DeletedNoteEntry extends VaultEntry {
   __deletedNotePreview: true
@@ -10,27 +11,33 @@ export interface DeletedNoteEntry extends VaultEntry {
   __changeBinary: boolean
 }
 
-const FILTER_TITLES: Partial<Record<'archived' | 'changes' | 'inbox' | 'pulse', string>> = {
-  archived: 'Archive',
-  changes: 'Changes',
-  inbox: 'Inbox',
-  pulse: 'History',
+const FILTER_TITLE_KEYS: Partial<Record<'archived' | 'changes' | 'inbox' | 'pulse', TranslationKey>> = {
+  archived: 'noteList.title.archive',
+  changes: 'noteList.title.changes',
+  inbox: 'noteList.title.inbox',
+  pulse: 'noteList.title.pulse',
 }
 
-function resolveSelectionFilterTitle(selection: SidebarSelection): string | null {
+function resolveSelectionFilterTitle(selection: SidebarSelection, t: (key: TranslationKey) => string): string | null {
   if (selection.kind !== 'filter') return null
-  return FILTER_TITLES[selection.filter as keyof typeof FILTER_TITLES] ?? null
+  const key = FILTER_TITLE_KEYS[selection.filter as keyof typeof FILTER_TITLE_KEYS]
+  return key ? t(key) : null
 }
 
-export function resolveHeaderTitle(selection: SidebarSelection, typeDocument: VaultEntry | null, views?: ViewFile[]): string {
+export function resolveHeaderTitle(
+  selection: SidebarSelection,
+  typeDocument: VaultEntry | null,
+  t: (key: TranslationKey) => string,
+  views?: ViewFile[],
+): string {
   if (selection.kind === 'view') {
     const view = views?.find((v) => v.filename === selection.filename)
-    return view?.definition.name ?? 'View'
+    return view?.definition.name ?? t('noteList.title.viewFallback')
   }
   if (selection.kind === 'entity') return selection.entry.title
   if (typeDocument) return typeDocument.title
 
-  return resolveSelectionFilterTitle(selection) ?? 'Notes'
+  return resolveSelectionFilterTitle(selection, t) ?? t('noteList.title.notes')
 }
 
 export function filterByQuery<T extends { title: string }>(items: T[], query: string): T[] {

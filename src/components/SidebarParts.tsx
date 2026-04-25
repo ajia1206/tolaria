@@ -5,6 +5,8 @@ import { getTypeColor, getTypeLightColor } from '../utils/typeColors'
 import { type IconProps } from '@phosphor-icons/react'
 import { SIDEBAR_ITEM_PADDING } from './sidebar/sidebarStyles'
 import { Button } from './ui/button'
+import { useI18n } from '../lib/useI18n'
+import { translateVaultDisplayText } from '../lib/vaultDisplay'
 
 const SIDEBAR_COUNT_PILL_STYLE = {
   borderRadius: 9999,
@@ -158,8 +160,9 @@ function DisabledNavItem({
   disabledTooltip?: string
   padding: ReturnType<typeof getNavItemPadding>
 }) {
+  const { t } = useI18n()
   return (
-    <div className="flex select-none items-center gap-2 rounded text-foreground" style={{ padding, borderRadius: 4, opacity: 0.4, cursor: 'not-allowed' }} title={disabledTooltip ?? "Coming soon"}>
+    <div className="flex select-none items-center gap-2 rounded text-foreground" style={{ padding, borderRadius: 4, opacity: 0.4, cursor: 'not-allowed' }} title={disabledTooltip ?? t('sidebar.comingSoon')}>
       <SidebarNavIcon Icon={Icon} emoji={emoji} iconSize={getNavItemIconSize(compact)} />
       <NavItemLabel label={label} compact={compact} />
     </div>
@@ -282,12 +285,14 @@ export function SectionContent({
   onContextMenu, dragHandleProps,
   isRenaming, renameInitialValue, onRenameSubmit, onRenameCancel,
 }: SectionContentProps) {
+  const { locale } = useI18n()
   const { label, type, Icon, customColor } = group
   const { sectionColor, sectionLightColor } = resolveSectionColors(type, customColor)
+  const displayLabel = translateVaultDisplayText(locale, label)
 
   return (
     <SectionHeader
-      label={label} type={type} Icon={Icon}
+      label={displayLabel} type={type} Icon={Icon}
       sectionColor={sectionColor}
       sectionLightColor={sectionLightColor}
       itemCount={itemCount}

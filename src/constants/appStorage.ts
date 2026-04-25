@@ -1,4 +1,5 @@
 export const APP_STORAGE_KEYS = {
+  locale: 'tolaria-locale',
   theme: 'tolaria-theme',
   zoom: 'tolaria:zoom-level',
   viewMode: 'tolaria-view-mode',
@@ -13,6 +14,7 @@ export const APP_STORAGE_KEYS = {
 } as const
 
 export const LEGACY_APP_STORAGE_KEYS = {
+  locale: 'laputa-locale',
   theme: 'laputa-theme',
   zoom: 'laputa:zoom-level',
   viewMode: 'laputa-view-mode',
@@ -29,6 +31,7 @@ type MigratableStorageKey = keyof typeof LEGACY_APP_STORAGE_KEYS
 
 const MIGRATABLE_STORAGE_KEYS: MigratableStorageKey[] = [
   'theme',
+  'locale',
   'zoom',
   'viewMode',
   'tagColors',

@@ -8,10 +8,14 @@ import {
 } from '@phosphor-icons/react'
 import { getTypeColor, getTypeLightColor } from '../utils/typeColors'
 import { resolveIcon } from '../utils/iconRegistry'
-import { relativeDate, getDisplayDate } from '../utils/noteListHelpers'
+import { getDisplayDate } from '../utils/noteListHelpers'
 import { NoteTitleIcon } from './NoteTitleIcon'
 import { PropertyChips } from './note-item/PropertyChips'
 import { ChangeNoteContent } from './note-item/ChangeNoteContent'
+import { useI18n } from '../lib/useI18n'
+import { formatRelativeDate } from '../lib/i18nShared'
+import type { TranslationKey } from '../lib/i18nMessages'
+import { translateVaultDisplayText, translateVaultSnippet } from '../lib/vaultDisplay'
 
 const TYPE_ICON_MAP: Record<string, ComponentType<SVGAttributes<SVGSVGElement>>> = {
   Project: Wrench,
@@ -30,13 +34,14 @@ export function getTypeIcon(isA: string | null, customIcon?: string | null): Com
   return (isA && TYPE_ICON_MAP[isA]) || FileText
 }
 
-const NOTE_STATUS_DOT: Record<string, { color: string; testId: string; title: string }> = {
-  pendingSave: { color: 'var(--accent-green)', testId: 'pending-save-indicator', title: 'Saving to disk…' },
-  new: { color: 'var(--accent-green)', testId: 'new-indicator', title: 'New (uncommitted)' },
-  modified: { color: 'var(--accent-orange)', testId: 'modified-indicator', title: 'Modified (uncommitted)' },
+const NOTE_STATUS_DOT: Record<string, { color: string; testId: string; titleKey: TranslationKey }> = {
+  pendingSave: { color: 'var(--accent-green)', testId: 'pending-save-indicator', titleKey: 'noteItem.status.saving' },
+  new: { color: 'var(--accent-green)', testId: 'new-indicator', titleKey: 'noteItem.status.new' },
+  modified: { color: 'var(--accent-orange)', testId: 'modified-indicator', titleKey: 'noteItem.status.modified' },
 }
 
 function StatusDot({ noteStatus }: { noteStatus: NoteStatus }) {
+  const { t } = useI18n()
   const dot = NOTE_STATUS_DOT[noteStatus]
   if (!dot) return null
   return (
@@ -44,16 +49,17 @@ function StatusDot({ noteStatus }: { noteStatus: NoteStatus }) {
       className={`mr-1.5 inline-block align-middle${noteStatus === 'pendingSave' ? ' tab-status-pulse' : ''}`}
       style={{ width: 6, height: 6, borderRadius: '50%', background: dot.color, verticalAlign: 'middle' }}
       data-testid={dot.testId}
-      title={dot.title}
+      title={t(dot.titleKey)}
     />
   )
 }
 
 function StateBadge({ archived }: { archived: boolean }) {
+  const { t } = useI18n()
   if (archived) {
     return (
       <span className="ml-1.5 inline-block align-middle text-muted-foreground" style={{ fontSize: 9, fontWeight: 500, background: 'var(--muted)', borderRadius: 4, padding: '1px 4px', verticalAlign: 'middle' }}>
-        ARCHIVED
+        {t('noteItem.archived')}
       </span>
     )
   }
@@ -112,7 +118,9 @@ function NoteTypeIndicator({
 }
 
 function NoteSnippet({ snippet }: { snippet?: string | null }) {
-  if (!snippet) return null
+  const { locale } = useI18n()
+  const displaySnippet = translateVaultSnippet(locale, snippet)
+  if (!displaySnippet) return null
 
   return (
     <div
@@ -120,7 +128,7 @@ function NoteSnippet({ snippet }: { snippet?: string | null }) {
       data-testid="note-snippet"
       style={{ display: '-webkit-box', WebkitLineClamp: 2, WebkitBoxOrient: 'vertical', overflow: 'hidden' }}
     >
-      {snippet}
+      {displaySnippet}
     </div>
   )
 }
@@ -256,19 +264,23 @@ function NoteTitleRow({
   isSelected: boolean
   noteStatus: NoteStatus
 }) {
+  const { locale } = useI18n()
+
   return (
     <div className={cn('truncate pr-5 text-[13px]', isBinary ? 'text-muted-foreground' : 'text-foreground', isSelected && !isBinary ? 'font-semibold' : 'font-medium')}>
       {noteStatus !== 'clean' && !isBinary && <StatusDot noteStatus={noteStatus} />}
       <NoteTitleIcon icon={entry.icon} size={15} className="mr-1" testId="note-title-icon" />
-      {entry.title}
+      {translateVaultDisplayText(locale, entry.title)}
       {!isBinary && <StateBadge archived={entry.archived} />}
     </div>
   )
 }
 
 function NoteDateRow({ entry }: { entry: VaultEntry }) {
-  const modifiedLabel = relativeDate(getDisplayDate(entry))
-  const createdLabel = entry.createdAt ? `Created ${relativeDate(entry.createdAt)}` : null
+  const { locale, t } = useI18n()
+  const modifiedLabel = formatRelativeDate(locale, getDisplayDate(entry))
+  const createdDate = formatRelativeDate(locale, entry.createdAt)
+  const createdLabel = createdDate ? t('noteItem.created', { date: createdDate }) : null
 
   if (!modifiedLabel && !createdLabel) return null
 
@@ -339,6 +351,7 @@ function resolveNoteItemSurfaceProps({
   onContextMenu,
   typeColor,
   typeLightColor,
+  cannotOpenTitle,
 }: NoteItemVisualState & {
   entry: VaultEntry
   onClickNote: NoteItemProps['onClickNote']
@@ -346,6 +359,7 @@ function resolveNoteItemSurfaceProps({
   onContextMenu?: NoteItemProps['onContextMenu']
   typeColor: string
   typeLightColor: string
+  cannotOpenTitle: string
 }): NoteItemSurfaceProps {
   return {
     className: noteItemClassName({ isBinary, isSelected, isMultiSelected, isHighlighted }),
@@ -354,7 +368,7 @@ function resolveNoteItemSurfaceProps({
     onContextMenu: onContextMenu ? (event) => onContextMenu(entry, event) : undefined,
     onMouseEnter: !isBinary && onPrefetch ? () => onPrefetch(entry.path) : undefined,
     testId: isMultiSelected ? 'multi-selected-item' : isBinary ? 'binary-file-item' : undefined,
-    title: isBinary ? 'Cannot open this file type' : undefined,
+    title: isBinary ? cannotOpenTitle : undefined,
   }
 }
 
@@ -439,6 +453,7 @@ function NoteItemContent({
 }
 
 export function NoteItem({ entry, isSelected, isMultiSelected = false, isHighlighted = false, noteStatus = 'clean', changeStatus, typeEntryMap, allEntries, displayPropsOverride, onClickNote, onPrefetch, onContextMenu }: NoteItemProps) {
+  const { t } = useI18n()
   const isBinary = entry.fileKind === 'binary'
   const te = typeEntryMap[entry.isA ?? '']
   const displayProps = resolveDisplayProps(entry, typeEntryMap, displayPropsOverride)
@@ -455,6 +470,7 @@ export function NoteItem({ entry, isSelected, isMultiSelected = false, isHighlig
     onContextMenu,
     typeColor,
     typeLightColor,
+    cannotOpenTitle: t('noteItem.cannotOpenFileType'),
   })
 
   return (

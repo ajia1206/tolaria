@@ -1,6 +1,7 @@
 import { useState } from 'react'
 import { GitBranch } from '@phosphor-icons/react'
 import { OnboardingShell } from './OnboardingShell'
+import { useI18n } from '../lib/useI18n'
 
 interface GitRequiredModalProps {
   onCreateRepo: () => Promise<void>
@@ -8,6 +9,7 @@ interface GitRequiredModalProps {
 }
 
 export function GitRequiredModal({ onCreateRepo, onChooseVault }: GitRequiredModalProps) {
+  const { t } = useI18n()
   const [creating, setCreating] = useState(false)
   const [error, setError] = useState<string | null>(null)
 
@@ -30,10 +32,9 @@ export function GitRequiredModal({ onCreateRepo, onChooseVault }: GitRequiredMod
     >
       <div className="flex flex-col items-center gap-5 rounded-xl border border-border bg-background p-8 shadow-lg">
         <GitBranch size={36} className="text-muted-foreground" />
-        <h2 className="m-0 text-lg font-semibold text-foreground">Git repository required</h2>
+        <h2 className="m-0 text-lg font-semibold text-foreground">{t('gitRequired.title')}</h2>
         <p className="m-0 text-center text-[13px] leading-relaxed text-muted-foreground">
-          Tolaria uses a git repository to track changes, detect moved files, and keep your vault safe.
-          We'll create a local repo — no remote needed.
+          {t('gitRequired.description')}
         </p>
         {error && (
           <p className="m-0 rounded-md bg-destructive/10 px-3 py-2 text-center text-[12px] text-destructive">
@@ -46,14 +47,14 @@ export function GitRequiredModal({ onCreateRepo, onChooseVault }: GitRequiredMod
             onClick={handleCreate}
             disabled={creating}
           >
-            {creating ? 'Creating…' : 'Create repository'}
+            {creating ? t('gitRequired.creating') : t('gitRequired.create')}
           </button>
           <button
             className="w-full cursor-pointer rounded-md border border-border bg-transparent px-4 py-2 text-[13px] font-medium text-foreground transition-colors hover:bg-muted disabled:cursor-not-allowed disabled:opacity-50"
             onClick={onChooseVault}
             disabled={creating}
           >
-            Choose another vault
+            {t('gitRequired.chooseOther')}
           </button>
         </div>
       </div>

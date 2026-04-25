@@ -120,6 +120,24 @@ describe('SettingsPanel', () => {
     }))
   })
 
+  it('preserves the selected app language on save', () => {
+    render(
+      <SettingsPanel
+        open={true}
+        settings={{ ...emptySettings, ui_language: 'zh-Hans' }}
+        onSave={onSave}
+        onClose={onClose}
+      />
+    )
+
+    expect(screen.getByTestId('settings-language')).toHaveAttribute('data-value', 'zh-Hans')
+    fireEvent.click(screen.getByTestId('settings-save'))
+
+    expect(onSave).toHaveBeenCalledWith(expect.objectContaining({
+      ui_language: 'zh-Hans',
+    }))
+  })
+
   it('preserves a saved dark color mode until changed', () => {
     render(
       <SettingsPanel

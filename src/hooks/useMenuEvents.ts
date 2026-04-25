@@ -6,6 +6,7 @@ import {
   isAppCommandId,
   type AppCommandHandlers,
 } from './appCommandDispatcher'
+import { useI18n } from '../lib/useI18n'
 import {
   NOTE_LIST_SEARCH_AVAILABILITY_EVENT,
   dispatchNoteListSearchToggle,
@@ -31,6 +32,7 @@ interface MenuStatePayload {
   hasRestorableDeletedNote?: boolean
   hasNoRemote?: boolean
   noteListSearchEnabled?: boolean
+  locale?: string
 }
 
 function readCustomEventDetail(event: Event): string | null {
@@ -162,6 +164,7 @@ export function dispatchMenuEvent(id: string, h: MenuEventHandlers): void {
 
 /** Listen for native macOS menu events and dispatch them to the appropriate handlers. */
 export function useMenuEvents(handlers: MenuEventHandlers) {
+  const { locale } = useI18n()
   const ref = useRef(handlers)
   const noteListSearchEnabled = useNoteListSearchMenuState()
   const hasActiveNote = handlers.activeTabPath !== null
@@ -184,5 +187,6 @@ export function useMenuEvents(handlers: MenuEventHandlers) {
     hasRestorableDeletedNote,
     hasNoRemote,
     noteListSearchEnabled,
+    locale,
   })
 }
