@@ -595,7 +595,7 @@ fn build_window_menu(app: &AppHandle, labels: &MenuLabels) -> MenuResult {
 }
 
 pub fn setup_menu(app: &App) -> Result<(), Box<dyn std::error::Error>> {
-    set_menu_locale(&app.handle(), None)?;
+    set_menu_locale(app.handle(), None)?;
 
     app.on_menu_event(|app_handle, event| {
         let id = event.id().0.as_str();
