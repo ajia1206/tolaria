@@ -20,6 +20,57 @@ test.describe('Inline wikilink editor regression', () => {
     await expect(page.getByTestId('ai-panel')).toBeVisible({ timeout: 3_000 })
   })
 
+  test('keeps plain character typing stable in the AI panel chat input', async ({ page }) => {
+    const pageErrors = trackPageErrors(page)
+    const editor = page.getByTestId('agent-input')
+    await expect(editor).toBeFocused()
+
+    await page.keyboard.type('luca')
+
+    await expectNormalizedEditorText(editor, 'luca')
+    await expectEditorSelectionRange(page, {
+      expectedRange: { start: 4, end: 4 },
+      target: { dataTestId: 'agent-input' },
+    })
+    await expectNoPageErrors(pageErrors)
+  })
+
+  test('keeps follow-up typing stable after editing the active note body', async ({ page }) => {
+    const pageErrors = trackPageErrors(page)
+    const noteBlock = page.locator('.bn-block-content').nth(1)
+    const editor = page.getByTestId('agent-input')
+    const noteMarker = ` follow-up guard ${Date.now()}`
+
+    await expect(noteBlock).toBeVisible({ timeout: 5_000 })
+    await noteBlock.click()
+    await page.keyboard.type(noteMarker)
+    await expect(page.locator('.bn-editor')).toContainText(noteMarker.trim())
+
+    await editor.click()
+    await page.keyboard.type('follow up after note edit')
+
+    await expectNormalizedEditorText(editor, 'follow up after note edit')
+    await expectNoPageErrors(pageErrors)
+  })
+
+  test('keeps select-all cut scoped to the AI panel chat input', async ({ page }) => {
+    const pageErrors = trackPageErrors(page)
+    const editor = page.getByTestId('agent-input')
+    await page.context().grantPermissions(['clipboard-read', 'clipboard-write'])
+    await expect(editor).toBeFocused()
+
+    await page.keyboard.type('luca')
+    await page.keyboard.press('Meta+A')
+    await page.keyboard.press('Meta+X')
+
+    await expect(page.getByTestId('ai-panel')).toBeVisible()
+    await expectNormalizedEditorText(editor, '')
+    await expect
+      .poll(() => page.evaluate(() => navigator.clipboard.readText()))
+      .toBe('luca')
+    await expectNoPageErrors(pageErrors)
+  })
+
   test('keeps inline chip editing stable after insertion and range deletion', async ({ page }) => {
     const pageErrors = trackPageErrors(page)
     const editor = page.getByTestId('agent-input')

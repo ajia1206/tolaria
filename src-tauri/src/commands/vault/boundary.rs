@@ -36,7 +36,9 @@ impl VaultBoundary {
 
         let root = match (configured_root, requested_root) {
             (Some(configured), Some(requested)) => {
-                if configured.canonical != requested.canonical {
+                if configured.canonical != requested.canonical
+                    && !is_registered_vault_root(&requested)?
+                {
                     return Err(ACTIVE_VAULT_MISMATCH_ERROR.to_string());
                 }
                 requested
@@ -123,6 +125,63 @@ fn load_configured_active_vault_root() -> Result<Option<VaultRootPaths>, String>
         .filter(|path| !path.trim().is_empty())
         .map(build_vault_root_paths)
         .transpose()
+}
+
+fn load_registered_vault_roots() -> Result<Vec<VaultRootPaths>, String> {
+    let list = vault_list::load_vault_list()?;
+    Ok(registered_vault_roots(&list))
+}
+
+fn registered_vault_roots(list: &vault_list::VaultList) -> Vec<VaultRootPaths> {
+    list.vaults
+        .iter()
+        .map(|entry| entry.path.as_str())
+        .chain(list.active_vault.as_deref())
+        .filter(|path| !path.trim().is_empty())
+        .filter_map(|path| build_vault_root_paths(path).ok())
+        .collect()
+}
+
+fn is_registered_vault_root(requested: &VaultRootPaths) -> Result<bool, String> {
+    let list = vault_list::load_vault_list()?;
+    let registered_paths = list
+        .vaults
+        .iter()
+        .map(|entry| entry.path.as_str())
+        .chain(list.active_vault.as_deref());
+
+    for path in registered_paths {
+        if path.trim().is_empty() {
+            continue;
+        }
+        let Ok(root) = build_vault_root_paths(path) else {
+            continue;
+        };
+        if root.canonical == requested.canonical {
+            return Ok(true);
+        }
+    }
+    Ok(false)
+}
+
+fn find_registered_root_for_absolute_path(
+    raw_path: &str,
+) -> Result<Option<VaultRootPaths>, String> {
+    let requested = PathBuf::from(expand_tilde(raw_path).into_owned());
+    if !requested.is_absolute() {
+        return Ok(None);
+    }
+
+    let canonical = canonicalize_candidate_for_write(&requested)?;
+    let roots = match load_registered_vault_roots() {
+        Ok(roots) => roots,
+        Err(_) => return Ok(None),
+    };
+    let root = roots
+        .into_iter()
+        .filter(|root| canonical.starts_with(&root.canonical))
+        .max_by_key(|root| root.canonical.components().count());
+    Ok(root)
 }
 
 fn build_vault_root_paths(raw_vault_path: &str) -> Result<VaultRootPaths, String> {
@@ -232,6 +291,20 @@ pub(crate) fn with_validated_path<T>(
     mode: ValidatedPathMode,
     action: impl FnOnce(&str) -> Result<T, String>,
 ) -> Result<T, String> {
+    if vault_path.is_none() {
+        if let Some(root) = find_registered_root_for_absolute_path(path)? {
+            let boundary = VaultBoundary {
+                requested_root: root.requested,
+                canonical_root: root.canonical,
+            };
+            let validated_path = match mode {
+                ValidatedPathMode::Existing => boundary.validate_existing_path(path)?,
+                ValidatedPathMode::Writable => boundary.validate_writable_path(path)?,
+            };
+            return action(&validated_path);
+        }
+    }
+
     with_boundary(vault_path, |boundary| {
         let validated_path = match mode {
             ValidatedPathMode::Existing => boundary.validate_existing_path(path)?,
@@ -267,11 +340,31 @@ pub(crate) fn with_existing_path_in_requested_vault<T>(
     path: &str,
     action: impl FnOnce(&str, &str) -> Result<T, String>,
 ) -> Result<T, String> {
-    with_boundary(Some(vault_path), |boundary| {
-        let requested_root = boundary.requested_root_str();
-        let validated_path = boundary.validate_existing_path(path)?;
-        action(&requested_root, &validated_path)
-    })
+    let requested_validation = with_boundary(Some(vault_path), |boundary| {
+        Ok((
+            boundary.requested_root_str(),
+            boundary.validate_existing_path(path)?,
+        ))
+    });
+
+    let validated = match requested_validation {
+        Ok(validated) => validated,
+        Err(error) if error == ACTIVE_VAULT_PATH_ERROR || error == ACTIVE_VAULT_MISMATCH_ERROR => {
+            let Some(root) = find_registered_root_for_absolute_path(path)? else {
+                return Err(error);
+            };
+            let boundary = VaultBoundary {
+                requested_root: root.requested,
+                canonical_root: root.canonical,
+            };
+            (
+                boundary.requested_root_str(),
+                boundary.validate_existing_path(path)?,
+            )
+        }
+        Err(error) => return Err(error),
+    };
+    action(&validated.0, &validated.1)
 }
 
 pub(crate) fn with_view_file<T>(
@@ -284,4 +377,38 @@ pub(crate) fn with_view_file<T>(
         let requested_root = boundary.requested_root_str();
         action(&requested_root, filename)
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::vault_list::{VaultEntry, VaultList};
+
+    #[test]
+    fn registered_vault_roots_skip_unavailable_vaults() {
+        let available = tempfile::TempDir::new().unwrap();
+        let missing = available.path().join("missing-vault");
+        let list = VaultList {
+            vaults: vec![
+                VaultEntry {
+                    label: "Missing".to_string(),
+                    path: missing.to_string_lossy().to_string(),
+                    ..Default::default()
+                },
+                VaultEntry {
+                    label: "Available".to_string(),
+                    path: available.path().to_string_lossy().to_string(),
+                    ..Default::default()
+                },
+            ],
+            active_vault: None,
+            default_workspace_path: None,
+            hidden_defaults: vec![],
+        };
+
+        let roots = registered_vault_roots(&list);
+
+        assert_eq!(roots.len(), 1);
+        assert_eq!(roots[0].canonical, available.path().canonicalize().unwrap());
+    }
 }

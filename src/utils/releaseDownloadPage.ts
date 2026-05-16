@@ -1,6 +1,11 @@
-const RELEASE_HISTORY_URL = 'https://refactoringhq.github.io/tolaria/'
+const RELEASE_HISTORY_URL = 'https://tolaria.md/releases/'
+const DOWNLOAD_FRAME_NAME = 'tolaria-download-frame'
 
-type StablePlatformKey = 'darwin-aarch64' | 'linux-x86_64' | 'windows-x86_64'
+type StablePlatformKey =
+  | 'darwin-aarch64'
+  | 'darwin-x86_64'
+  | 'linux-x86_64'
+  | 'windows-x86_64'
 
 type PlatformPayload = {
   dmg_url?: unknown
@@ -41,8 +46,12 @@ type DownloadPageContent = {
 
 const PLATFORM_METADATA: Record<StablePlatformKey, { buttonLabel: string; label: string }> = {
   'darwin-aarch64': {
-    buttonLabel: 'Download Tolaria for macOS',
-    label: 'macOS',
+    buttonLabel: 'Download Tolaria for macOS Apple Silicon',
+    label: 'macOS Apple Silicon',
+  },
+  'darwin-x86_64': {
+    buttonLabel: 'Download Tolaria for Intel Mac',
+    label: 'macOS Intel',
   },
   'linux-x86_64': {
     buttonLabel: 'Download Tolaria for Linux',
@@ -53,9 +62,13 @@ const PLATFORM_METADATA: Record<StablePlatformKey, { buttonLabel: string; label:
     label: 'Windows',
   },
 }
+const PLATFORM_METADATA_BY_KEY = new Map<StablePlatformKey, { buttonLabel: string; label: string }>(
+  Object.entries(PLATFORM_METADATA) as Array<[StablePlatformKey, { buttonLabel: string; label: string }]>,
+)
 
 const PLATFORM_ORDER: StablePlatformKey[] = [
   'darwin-aarch64',
+  'darwin-x86_64',
   'windows-x86_64',
   'linux-x86_64',
 ]
@@ -111,7 +124,7 @@ const REDIRECT_PAGE_STYLES = `
       width: min(100%, 520px);
       background: var(--download-surface-card);
       border: 1px solid var(--download-border-default);
-      border-radius: 16px;
+      border-radius: 8px;
       padding: 24px;
       box-shadow: 0 16px 40px var(--download-shadow-card);
     }
@@ -140,7 +153,7 @@ const REDIRECT_PAGE_STYLES = `
       justify-content: center;
       min-height: 44px;
       padding: 0 16px;
-      border-radius: 10px;
+      border-radius: 8px;
       background: var(--download-accent);
       color: var(--download-text-on-accent);
       text-decoration: none;
@@ -182,8 +195,11 @@ function buildStableDownloadTarget(
   platform: StablePlatformKey,
   url: string,
 ): StableDownloadTarget {
+  const metadata = PLATFORM_METADATA_BY_KEY.get(platform)
+  if (!metadata) throw new Error(`Unsupported stable platform: ${platform}`)
+
   return {
-    ...PLATFORM_METADATA[platform],
+    ...metadata,
     url,
   }
 }
@@ -196,6 +212,7 @@ function extractPlatformDownloadUrl(
 
   switch (platform) {
     case 'darwin-aarch64':
+    case 'darwin-x86_64':
       return (
         normalizeUrl(payload.download_url)
         ?? normalizeUrl(payload.dmg_url)
@@ -220,8 +237,9 @@ export function extractStableDownloadTargets(payload: unknown): StableDownloadTa
 
   const downloads: StableDownloadTargets = {}
   for (const platform of PLATFORM_ORDER) {
-    const url = extractPlatformDownloadUrl(platform, platforms[platform])
-    if (url) downloads[platform] = buildStableDownloadTarget(platform, url)
+    const platformPayload = Reflect.get(platforms, platform) as PlatformPayload | undefined
+    const url = extractPlatformDownloadUrl(platform, platformPayload)
+    if (url) Reflect.set(downloads, platform, buildStableDownloadTarget(platform, url))
   }
 
   return downloads
@@ -231,16 +249,30 @@ function isPublicStableRelease(release: GitHubReleasePayload): boolean {
   return release.draft !== true && release.prerelease !== true
 }
 
+function classifyMacReleaseAsset(name: string): {
+  platform: StablePlatformKey
+  preference: number
+} | null {
+  const normalized = name.toLowerCase()
+  const isDmg = normalized.endsWith('.dmg')
+  const isUpdaterTarball = normalized.endsWith('.app.tar.gz')
+  if (!isDmg && !isUpdaterTarball) return null
+
+  const preference = isDmg ? 2 : 1
+  if (/(?:^|[-_.])(x64|x86_64|intel)(?:[-_.]|$)/.test(normalized)) {
+    return { platform: 'darwin-x86_64', preference }
+  }
+
+  return { platform: 'darwin-aarch64', preference }
+}
+
 function classifyReleaseAsset(name: string): {
   platform: StablePlatformKey
   preference: number
 } | null {
-  if (name.endsWith('.dmg')) {
-    return { platform: 'darwin-aarch64', preference: 2 }
-  }
-  if (name.endsWith('.app.tar.gz')) {
-    return { platform: 'darwin-aarch64', preference: 1 }
-  }
+  const macAsset = classifyMacReleaseAsset(name)
+  if (macAsset) return macAsset
+
   if (name.endsWith('-setup.exe')) {
     return { platform: 'windows-x86_64', preference: 2 }
   }
@@ -272,11 +304,11 @@ function updateDownloadPreference(
   state: ReleaseAssetSelectionState,
   selection: ReleaseAssetSelection,
 ) {
-  const currentPreference = state.preferences[selection.platform] ?? Number.NEGATIVE_INFINITY
+  const currentPreference = (Reflect.get(state.preferences, selection.platform) as number | undefined) ?? Number.NEGATIVE_INFINITY
   if (selection.preference < currentPreference) return
 
-  state.preferences[selection.platform] = selection.preference
-  state.downloads[selection.platform] = buildStableDownloadTarget(selection.platform, selection.url)
+  Reflect.set(state.preferences, selection.platform, selection.preference)
+  Reflect.set(state.downloads, selection.platform, buildStableDownloadTarget(selection.platform, selection.url))
 }
 
 function selectReleaseAsset(asset: ReleaseAssetPayload): ReleaseAssetSelection | null {
@@ -348,7 +380,7 @@ function buildStableDownloadPageContent(
 ): DownloadPageContent {
   if (Object.keys(downloads).length > 0) {
     return {
-      helperText: 'If the download does not start automatically, use one of the platform links below.',
+      helperText: 'Your download should start automatically. If it does not, use one of the platform links below.',
       message: 'Preparing the latest stable Tolaria download for your platform.',
       shouldRedirect: true,
       title: 'Tolaria Stable Download',
@@ -365,28 +397,37 @@ function buildStableDownloadPageContent(
 
 function buildDownloadsMarkup(downloads: StableDownloadTargets): string {
   const targets = PLATFORM_ORDER
-    .map((platform) => downloads[platform])
+    .map((platform) => Reflect.get(downloads, platform) as StableDownloadTarget | undefined)
     .filter((target): target is StableDownloadTarget => Boolean(target))
 
   if (targets.length === 0) {
     return `<div class="button-list"><a id="download-link" href="${RELEASE_HISTORY_URL}" data-secondary="true">View release history</a></div>`
   }
 
-  const primaryTarget = targets[0]
+  const primaryTarget = targets.at(0)
+  if (!primaryTarget) {
+    return `<div class="button-list"><a id="download-link" href="${RELEASE_HISTORY_URL}" data-secondary="true">View release history</a></div>`
+  }
   const secondaryLinks = targets
     .map((target) => (
-      `<a href="${escapeHtml(target.url)}" data-secondary="true">${escapeHtml(target.label)}</a>`
+      `<a href="${escapeHtml(target.url)}" target="${DOWNLOAD_FRAME_NAME}" rel="noreferrer" data-secondary="true">${escapeHtml(target.label)}</a>`
     ))
     .join('')
 
   return `
     <div class="button-list">
-      <a id="download-link" href="${escapeHtml(primaryTarget.url)}">${escapeHtml(primaryTarget.buttonLabel)}</a>
+      <a id="download-link" href="${escapeHtml(primaryTarget.url)}" target="${DOWNLOAD_FRAME_NAME}" rel="noreferrer">${escapeHtml(primaryTarget.buttonLabel)}</a>
     </div>
     <div class="button-list">${secondaryLinks}</div>
     <div class="button-list">
       <a href="${RELEASE_HISTORY_URL}" data-secondary="true">View release history</a>
     </div>`
+}
+
+function buildDownloadFrameMarkup(downloads: StableDownloadTargets): string {
+  if (Object.keys(downloads).length === 0) return ''
+
+  return `<iframe title="Tolaria installer download" name="${DOWNLOAD_FRAME_NAME}" sandbox="allow-downloads" hidden></iframe>`
 }
 
 function buildRedirectMarkup(downloads: StableDownloadTargets): string {
@@ -398,6 +439,9 @@ function buildRedirectMarkup(downloads: StableDownloadTargets): string {
     <script>
       const DOWNLOAD_TARGETS = ${serializedTargets};
       const PLATFORM_ORDER = ${JSON.stringify(PLATFORM_ORDER)};
+      const hasMultipleMacDownloads = Boolean(
+        DOWNLOAD_TARGETS['darwin-aarch64'] && DOWNLOAD_TARGETS['darwin-x86_64']
+      );
 
       function detectPlatform(userAgent) {
         if (/Windows/i.test(userAgent)) return 'windows-x86_64';
@@ -406,23 +450,71 @@ function buildRedirectMarkup(downloads: StableDownloadTargets): string {
         return null;
       }
 
-      const detectedPlatform = detectPlatform(navigator.userAgent);
-      const resolvedTarget = (
-        detectedPlatform && DOWNLOAD_TARGETS[detectedPlatform]
-      ) || DOWNLOAD_TARGETS[PLATFORM_ORDER.find((platform) => DOWNLOAD_TARGETS[platform])] || null;
-
-      if (resolvedTarget) {
-        const link = document.getElementById('download-link');
-        const message = document.getElementById('download-message');
-        if (link) {
-          link.href = resolvedTarget.url;
-          link.textContent = resolvedTarget.buttonLabel;
-        }
-        if (message) {
-          message.textContent = 'Redirecting to the latest stable Tolaria download for ' + resolvedTarget.label + '.';
-        }
-        window.location.replace(resolvedTarget.url);
+      function firstAvailableTarget() {
+        return DOWNLOAD_TARGETS[PLATFORM_ORDER.find((platform) => DOWNLOAD_TARGETS[platform])] || null;
       }
+
+      function startDownload(target) {
+        const frame = document.querySelector('iframe[name="${DOWNLOAD_FRAME_NAME}"]');
+        if (!frame || !target) return;
+        frame.src = target.url;
+      }
+
+      function resolvedDownloadTarget() {
+        const detectedPlatform = detectPlatform(navigator.userAgent);
+        if (detectedPlatform && DOWNLOAD_TARGETS[detectedPlatform]) {
+          return DOWNLOAD_TARGETS[detectedPlatform];
+        }
+
+        return firstAvailableTarget();
+      }
+
+      function requiresMacDownloadChoice() {
+        return hasMultipleMacDownloads && /Mac OS X|Macintosh/i.test(navigator.userAgent);
+      }
+
+      function updatePrimaryDownloadLink(target) {
+        const link = document.getElementById('download-link');
+        if (!link) return;
+
+        link.href = target.url;
+        link.textContent = target.buttonLabel;
+      }
+
+      function downloadMessage(target, requiresMacChoice) {
+        if (requiresMacChoice) {
+          return 'Choose the Apple Silicon or Intel Mac download below.';
+        }
+
+        return 'Starting the latest stable Tolaria download for ' + target.label + '.';
+      }
+
+      function updateDownloadMessage(target, requiresMacChoice) {
+        const message = document.getElementById('download-message');
+        if (!message) return;
+
+        message.textContent = downloadMessage(target, requiresMacChoice);
+      }
+
+      function scheduleAutomaticDownload(target, requiresMacChoice) {
+        if (requiresMacChoice) return;
+
+        window.setTimeout(function () {
+          startDownload(target);
+        }, 250);
+      }
+
+      function setupDownloadPage() {
+        const target = resolvedDownloadTarget();
+        if (!target) return;
+
+        const requiresMacChoice = requiresMacDownloadChoice();
+        updatePrimaryDownloadLink(target);
+        updateDownloadMessage(target, requiresMacChoice);
+        scheduleAutomaticDownload(target, requiresMacChoice);
+      }
+
+      window.addEventListener('DOMContentLoaded', setupDownloadPage);
     </script>`
 }
 
@@ -443,10 +535,11 @@ export function buildStableDownloadRedirectPage(
 <body>
   <main>
     <h1>${page.title}</h1>
-    <p id="download-message">${page.message}</p>
+    <p id="download-message" aria-live="polite">${page.message}</p>
     <p>${page.helperText}</p>
     ${buildDownloadsMarkup(downloads)}
   </main>
+  ${buildDownloadFrameMarkup(downloads)}
 </body>
 </html>
 `

@@ -1,5 +1,4 @@
 export const APP_STORAGE_KEYS = {
-  locale: 'tolaria-locale',
   theme: 'tolaria-theme',
   zoom: 'tolaria:zoom-level',
   viewMode: 'tolaria-view-mode',
@@ -10,11 +9,11 @@ export const APP_STORAGE_KEYS = {
   legacyMigrationFlag: 'tolaria:legacy-storage-migrated',
   sortPreferences: 'tolaria-sort-preferences',
   sidebarCollapsed: 'tolaria:sidebar-collapsed',
+  layoutPanels: 'tolaria:layout-panels',
   welcomeDismissed: 'tolaria_welcome_dismissed',
 } as const
 
 export const LEGACY_APP_STORAGE_KEYS = {
-  locale: 'laputa-locale',
   theme: 'laputa-theme',
   zoom: 'laputa:zoom-level',
   viewMode: 'laputa-view-mode',
@@ -24,6 +23,7 @@ export const LEGACY_APP_STORAGE_KEYS = {
   configMigrationFlag: 'laputa:config-migrated-to-vault',
   sortPreferences: 'laputa-sort-preferences',
   sidebarCollapsed: 'laputa:sidebar-collapsed',
+  layoutPanels: 'laputa:layout-panels',
   welcomeDismissed: 'laputa_welcome_dismissed',
 } as const
 
@@ -31,7 +31,6 @@ type MigratableStorageKey = keyof typeof LEGACY_APP_STORAGE_KEYS
 
 const MIGRATABLE_STORAGE_KEYS: MigratableStorageKey[] = [
   'theme',
-  'locale',
   'zoom',
   'viewMode',
   'tagColors',
@@ -40,6 +39,7 @@ const MIGRATABLE_STORAGE_KEYS: MigratableStorageKey[] = [
   'configMigrationFlag',
   'sortPreferences',
   'sidebarCollapsed',
+  'layoutPanels',
   'welcomeDismissed',
 ]
 
@@ -48,11 +48,13 @@ export function copyLegacyAppStorageKeys(): void {
     if (localStorage.getItem(APP_STORAGE_KEYS.legacyMigrationFlag) === '1') return
 
     for (const key of MIGRATABLE_STORAGE_KEYS) {
-      if (localStorage.getItem(APP_STORAGE_KEYS[key]) !== null) continue
+      const storageKey = Reflect.get(APP_STORAGE_KEYS, key) as string
+      const legacyStorageKey = Reflect.get(LEGACY_APP_STORAGE_KEYS, key) as string
+      if (localStorage.getItem(storageKey) !== null) continue
 
-      const legacyValue = localStorage.getItem(LEGACY_APP_STORAGE_KEYS[key])
+      const legacyValue = localStorage.getItem(legacyStorageKey)
       if (legacyValue !== null) {
-        localStorage.setItem(APP_STORAGE_KEYS[key], legacyValue)
+        localStorage.setItem(storageKey, legacyValue)
       }
     }
 
@@ -64,7 +66,9 @@ export function copyLegacyAppStorageKeys(): void {
 
 export function getAppStorageItem(key: MigratableStorageKey): string | null {
   try {
-    return localStorage.getItem(APP_STORAGE_KEYS[key]) ?? localStorage.getItem(LEGACY_APP_STORAGE_KEYS[key])
+    const storageKey = Reflect.get(APP_STORAGE_KEYS, key) as string
+    const legacyStorageKey = Reflect.get(LEGACY_APP_STORAGE_KEYS, key) as string
+    return localStorage.getItem(storageKey) ?? localStorage.getItem(legacyStorageKey)
   } catch {
     return null
   }

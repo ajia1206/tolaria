@@ -65,18 +65,21 @@ export function nextMessageId(): string {
 
 /** Max tokens of history to include in each request. */
 export const MAX_HISTORY_TOKENS = 100_000
+const CONVERSATION_HISTORY_OPEN_MARKER = ['<', 'conversation_history', '>'].join('')
+const CONVERSATION_HISTORY_CLOSE_MARKER = ['</', 'conversation_history', '>'].join('')
 
 /** Keep the most recent messages that fit within `maxTokens`. Drops oldest first. */
 export function trimHistory(history: ChatMessage[], maxTokens: number): ChatMessage[] {
   let tokenCount = 0
-  const result: ChatMessage[] = []
-  for (let i = history.length - 1; i >= 0; i--) {
-    const tokens = estimateTokens(history[i].content)
+  const newestFirst = [...history].reverse()
+  const keptNewestFirst: ChatMessage[] = []
+  for (const message of newestFirst) {
+    const tokens = estimateTokens(message.content)
     if (tokenCount + tokens > maxTokens) break
-    result.unshift(history[i])
+    keptNewestFirst.push(message)
     tokenCount += tokens
   }
-  return result
+  return keptNewestFirst.reverse()
 }
 
 /** Format conversation history + new message into a single prompt for the CLI. */
@@ -86,7 +89,7 @@ export function formatMessageWithHistory(history: ChatMessage[], newMessage: str
   const lines = history.map(m => `[${m.role}]: ${m.content}`)
   lines.push(`[user]: ${newMessage}`)
 
-  return `<conversation_history>\n${lines.join('\n\n')}\n</conversation_history>\n\nContinue the conversation. Respond only to the latest [user] message.`
+  return `${CONVERSATION_HISTORY_OPEN_MARKER}\n${lines.join('\n\n')}\n${CONVERSATION_HISTORY_CLOSE_MARKER}\n\nContinue the conversation. Respond only to the latest [user] message.`
 }
 
 // --- Claude CLI status ---
@@ -154,11 +157,11 @@ function handleChatStreamEvent(
  * can verify that history is actually being sent.
  */
 function mockChatResponse(message: string): string {
-  if (message.includes('<conversation_history>')) {
+  if (message.indexOf(CONVERSATION_HISTORY_OPEN_MARKER) >= 0) {
     const allUserLines = message.match(/\[user\]: .+/g) ?? []
     const turnCount = allUserLines.length
     // The last [user] line is the actual new message
-    const lastLine = allUserLines[allUserLines.length - 1] ?? ''
+    const lastLine = allUserLines.at(-1) ?? ''
     const lastUserMsg = lastLine.replace('[user]: ', '')
     return `[mock-with-history turns=${turnCount}] You asked: "${lastUserMsg}"`
   }

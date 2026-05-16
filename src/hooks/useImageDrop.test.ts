@@ -16,16 +16,16 @@ vi.mock('../mock-tauri', () => ({
 
 type DragDropEvent = { payload: { type: string; paths: string[]; position: { x: number; y: number } } }
 type DragDropCallback = (event: DragDropEvent) => void
-const capturedDragDropHandlers: Record<string, DragDropCallback | undefined> = {}
-let nativeDropUnlisten: (eventName: string) => void = (eventName) => {
-  delete capturedDragDropHandlers[eventName]
+let capturedDragDropHandler: DragDropCallback | undefined
+let nativeDropUnlisten = () => {
+  capturedDragDropHandler = undefined
 }
 
 vi.mock('@tauri-apps/api/webview', () => ({
   getCurrentWebview: () => ({
-    listen: vi.fn((eventName: string, cb: DragDropCallback) => {
-      capturedDragDropHandlers[eventName] = cb
-      return Promise.resolve(() => nativeDropUnlisten(eventName))
+    listen: vi.fn((_eventName: string, cb: DragDropCallback) => {
+      capturedDragDropHandler = cb
+      return Promise.resolve(nativeDropUnlisten)
     }),
   }),
 }))
@@ -188,17 +188,17 @@ describe('useImageDrop — Tauri native drag-drop', () => {
 
   beforeEach(() => {
     tauriMode = true
-    nativeDropUnlisten = (eventName) => {
-      delete capturedDragDropHandlers[eventName]
+    nativeDropUnlisten = () => {
+      capturedDragDropHandler = undefined
     }
-    for (const eventName of Object.keys(capturedDragDropHandlers)) delete capturedDragDropHandlers[eventName]
+    capturedDragDropHandler = undefined
     container = document.createElement('div')
     document.body.appendChild(container)
   })
 
   afterEach(() => {
     tauriMode = false
-    for (const eventName of Object.keys(capturedDragDropHandlers)) delete capturedDragDropHandlers[eventName]
+    capturedDragDropHandler = undefined
     container.remove()
   })
 
@@ -208,26 +208,23 @@ describe('useImageDrop — Tauri native drag-drop', () => {
     return renderHook(() => useImageDrop({ containerRef: ref, ...opts }))
   }
 
-  function emitNativeDropEvent(eventName: string, payload: DragDropEvent['payload']) {
-    const handler = capturedDragDropHandlers[eventName]
-    if (!handler) throw new Error(`No native drop handler registered for ${eventName}`)
-    handler({ payload })
+  function emitNativeDropEvent(payload: DragDropEvent['payload']) {
+    if (!capturedDragDropHandler) throw new Error('No native drop handler registered')
+    capturedDragDropHandler({ payload })
   }
 
   async function waitForNativeDropListeners() {
     await waitFor(() => {
-      expect(capturedDragDropHandlers['tauri://drag-drop']).toBeDefined()
-      expect(capturedDragDropHandlers['tauri://drag-leave']).toBeDefined()
+      expect(capturedDragDropHandler).toBeDefined()
     })
   }
 
-  it('registers only native events that carry actionable drop state', async () => {
+  it('registers the native window drag/drop listener', async () => {
     const { result } = renderImageDropTauri()
 
     await waitForNativeDropListeners()
 
     expect(result.current.isDragOver).toBe(false)
-    expect(capturedDragDropHandlers['tauri://drag-over']).toBeUndefined()
   })
 
   it('resets isDragOver on Tauri drop event', async () => {
@@ -242,10 +239,39 @@ describe('useImageDrop — Tauri native drag-drop', () => {
     expect(result.current.isDragOver).toBe(true)
 
     act(() => {
-      emitNativeDropEvent('tauri://drag-drop', { type: 'drop', paths: ['/tmp/photo.png'], position: { x: 100, y: 100 } })
+      emitNativeDropEvent({ type: 'drop', paths: ['/tmp/photo.png'], position: { x: 100, y: 100 } })
     })
 
     expect(result.current.isDragOver).toBe(false)
+  })
+
+  it('copies native image drops into the vault and emits attachment asset URLs', async () => {
+    const onImageUrl = vi.fn()
+    const { invoke, convertFileSrc } = await import('@tauri-apps/api/core')
+    vi.mocked(invoke).mockClear()
+    vi.mocked(convertFileSrc).mockClear()
+    vi.mocked(invoke).mockResolvedValue('/vault/attachments/123-photo.png')
+    vi.mocked(convertFileSrc).mockReturnValue('asset://localhost/vault/attachments/123-photo.png')
+    renderImageDropTauri({ onImageUrl, vaultPath: '/vault' })
+
+    await waitForNativeDropListeners()
+
+    act(() => {
+      emitNativeDropEvent({
+        type: 'drop',
+        paths: ['/tmp/photo.png', '/tmp/readme.txt'],
+        position: { x: 100, y: 100 },
+      })
+    })
+
+    await waitFor(() => {
+      expect(onImageUrl).toHaveBeenCalledWith('asset://localhost/vault/attachments/123-photo.png')
+    })
+    expect(invoke).toHaveBeenCalledWith('copy_image_to_vault', {
+      vaultPath: '/vault',
+      sourcePath: '/tmp/photo.png',
+    })
+    expect(invoke).toHaveBeenCalledTimes(1)
   })
 
   it('resets isDragOver on Tauri leave event', async () => {
@@ -259,7 +285,7 @@ describe('useImageDrop — Tauri native drag-drop', () => {
     expect(result.current.isDragOver).toBe(true)
 
     act(() => {
-      emitNativeDropEvent('tauri://drag-leave', { type: 'leave', paths: [], position: { x: 0, y: 0 } })
+      emitNativeDropEvent({ type: 'leave', paths: [], position: { x: 0, y: 0 } })
     })
 
     expect(result.current.isDragOver).toBe(false)

@@ -41,6 +41,7 @@ describe('noteListHelpers extra coverage', () => {
   })
 
   afterEach(() => {
+    vi.restoreAllMocks()
     vi.useRealTimers()
   })
 
@@ -71,9 +72,33 @@ describe('noteListHelpers extra coverage', () => {
       outgoingLinks: [],
     })
 
-    expect(formatSubtitle(modifiedEntry)).toBe('1h ago · 1,200 words · 2 links')
+    expect(formatSubtitle(modifiedEntry)).toBe('April 21, 2026 · 1,200 words · 2 links')
     expect(formatSubtitle(emptyEntry)).toBe('Empty')
-    expect(formatSearchSubtitle(modifiedEntry)).toBe('1h ago · Created 2d ago · 1,200 words · 2 links')
+    expect(formatSearchSubtitle(modifiedEntry)).toBe('April 21, 2026 · Created April 19, 2026 · 1,200 words · 2 links')
+  })
+
+  it('keeps note subtitle counts stable under non-English default number formatting', () => {
+    const originalToLocaleString = Number.prototype.toLocaleString
+    vi.spyOn(Number.prototype, 'toLocaleString').mockImplementation(function (
+      this: number,
+      locales?: Intl.LocalesArgument,
+      options?: Intl.NumberFormatOptions,
+    ) {
+      return originalToLocaleString.call(this, locales ?? 'de-DE', options)
+    })
+
+    const entry = makeEntry({
+      title: 'Project',
+      modifiedAt: Math.floor(Date.now() / 1000) - 3600,
+      createdAt: Math.floor(Date.now() / 1000) - 86400 * 2,
+      wordCount: 1200,
+      outgoingLinks: ['alpha', 'beta'],
+    })
+
+    expect(formatSubtitle(entry)).toBe('April 21, 2026 · 1,200 words · 2 links')
+    expect(formatSearchSubtitle(entry)).toBe('April 21, 2026 · Created April 19, 2026 · 1,200 words · 2 links')
+    expect(formatSubtitle(entry, 'iso')).toBe('2026-04-21 · 1,200 words · 2 links')
+    expect(formatSearchSubtitle(entry, 'european')).toBe('21/4/2026 · Created 19/4/2026 · 1,200 words · 2 links')
   })
 
   it('extracts sortable properties and labels custom property sort keys', () => {
@@ -118,14 +143,22 @@ describe('noteListHelpers extra coverage', () => {
     expect([...entries].sort(getSortComparator('property:Score', 'asc')).map((entry) => entry.title)).toEqual(['Alpha', 'Gamma', 'Beta'])
     expect([...entries].sort(getSortComparator('property:Start', 'asc')).map((entry) => entry.title)).toEqual(['Alpha', 'Gamma', 'Beta'])
     expect([...entries].sort(getSortComparator('property:Enabled', 'asc')).map((entry) => entry.title)).toEqual(['Alpha', 'Gamma', 'Beta'])
+
+    const entriesWithMissingTitle = [
+      makeEntry({ title: 'Beta' }),
+      makeEntry({ title: null as unknown as string }),
+    ]
+    expect([...entriesWithMissingTitle].sort(getSortComparator('title', 'asc')).map((entry) => entry.title)).toEqual([null, 'Beta'])
   })
 
   it('serializes, parses, loads, and saves sort preferences with migration support', () => {
     const serialized = serializeSortConfig({ option: 'property:Priority', direction: 'desc' })
     expect(serialized).toBe('property:Priority:desc')
     expect(parseSortConfig(serialized)).toEqual({ option: 'property:Priority', direction: 'desc' })
+    expect(parseSortConfig('date:desc')).toEqual({ option: 'property:date', direction: 'desc' })
     expect(parseSortConfig('broken')).toBeNull()
     expect(parseSortConfig('title:sideways')).toBeNull()
+    expect(parseSortConfig('property::asc')).toBeNull()
 
     localStorage.setItem(APP_STORAGE_KEYS.sortPreferences, JSON.stringify({
       '__list__': 'title',
@@ -183,7 +216,7 @@ describe('noteListHelpers extra coverage', () => {
       },
     }]
 
-    expect(filterEntries(entries, { kind: 'view', filename: 'work.view' }, undefined, views).map((entry) => entry.title)).toEqual(['Alpha'])
+    expect(filterEntries(entries, { kind: 'view', filename: 'work.view' }, { views }).map((entry) => entry.title)).toEqual(['Alpha'])
     expect(filterEntries(entries, { kind: 'folder', path: 'projects' }).map((entry) => entry.title)).toEqual(['Beta'])
     expect(filterEntries(entries, { kind: 'filter', filter: 'favorites' }).map((entry) => entry.title)).toEqual(['Alpha'])
     expect(filterEntries(entries, { kind: 'filter', filter: 'pulse' })).toEqual([])

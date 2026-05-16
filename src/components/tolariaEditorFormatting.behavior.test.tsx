@@ -33,6 +33,7 @@ vi.mock('@blocknote/react', () => ({
     <div key="boldStyleButton" />,
     <div key="italicStyleButton" />,
     <div key="strikeStyleButton" />,
+    <div key="fileDownloadButton" />,
     <div key="createLinkButton" />,
   ],
   PositionPopover: (props: Record<string, unknown> & { children?: ReactNode }) => {
@@ -59,6 +60,16 @@ vi.mock('@blocknote/react', () => ({
           {children}
         </button>
       ),
+    },
+  }),
+  useDictionary: () => ({
+    formatting_toolbar: {
+      file_download: {
+        tooltip: {
+          file: 'Download file',
+          image: 'Download image',
+        },
+      },
     },
   }),
   useEditorState: ({ editor, selector }: { editor: unknown; selector: (context: { editor: unknown }) => unknown }) => selector({ editor }),
@@ -89,12 +100,13 @@ vi.mock('@mantine/core', () => ({
   ),
 }))
 
-vi.mock('lucide-react', () => ({
-  Bold: MockIcon,
-  ChevronDown: MockIcon,
-  Code2: MockIcon,
-  Italic: MockIcon,
-  Strikethrough: MockIcon,
+vi.mock('@phosphor-icons/react', () => ({
+  ArrowSquareOut: MockIcon,
+  CaretDown: MockIcon,
+  Code: MockIcon,
+  TextB: MockIcon,
+  TextItalic: MockIcon,
+  TextStrikethrough: MockIcon,
 }))
 
 vi.mock('./tolariaEditorFormattingConfig', () => ({
@@ -109,16 +121,25 @@ vi.mock('./blockNoteFormattingToolbarHoverGuard', () => ({
   useBlockNoteFormattingToolbarHoverGuard: hoverGuardMock,
 }))
 
+vi.mock('../utils/url', () => ({
+  normalizeExternalUrl: vi.fn((url: string) => url),
+  openExternalUrl: vi.fn().mockResolvedValue(undefined),
+  openLocalFile: vi.fn().mockResolvedValue(undefined),
+}))
+
+import { openLocalFile } from '../utils/url'
 import {
   TolariaFormattingToolbar,
   TolariaFormattingToolbarController,
 } from './tolariaEditorFormatting'
 
-function createMockEditor(blockType = 'image') {
+const mockOpenLocalFile = vi.mocked(openLocalFile)
+
+function createMockEditor(blockType = 'image', props: Record<string, unknown> = {}) {
   const selectedBlock = {
     id: 'file-block',
     type: blockType,
-    props: { textAlignment: 'center', level: 1 },
+    props: { textAlignment: 'center', level: 1, ...props },
     content: [{ type: 'text', text: 'Selected block' }],
   }
   const domElement = document.createElement('div')
@@ -174,6 +195,20 @@ describe('tolariaEditorFormatting behavior', () => {
       expect.objectContaining({ id: 'file-block' }),
       { type: 'heading', props: { level: 1 } },
     )
+  })
+
+  it('opens selected file blocks through the active vault path', () => {
+    const editor = createMockEditor('file', {
+      url: 'asset://localhost/%2Fvault%2Fattachments%2Freport.pdf',
+    })
+    useBlockNoteEditorMock.mockReturnValue(editor)
+
+    render(<TolariaFormattingToolbar vaultPath="/vault" />)
+
+    fireEvent.click(screen.getByRole('button', { name: 'Download file' }))
+
+    expect(editor.focus).toHaveBeenCalled()
+    expect(mockOpenLocalFile).toHaveBeenCalledWith('/vault/attachments/report.pdf', '/vault')
   })
 
   it('controls the floating toolbar placement, hover guard, and escape-key close behavior', () => {
@@ -303,6 +338,181 @@ describe('tolariaEditorFormatting behavior', () => {
     fireEvent.blur(toolbarWrapper, { relatedTarget: document.body })
 
     expect(formattingToolbarStore.setState).toHaveBeenCalledWith(false)
+  })
+
+  it('deduplicates floating toolbar store writes during close races', () => {
+    const editor = createMockEditor('paragraph')
+    useBlockNoteEditorMock.mockReturnValue(editor)
+
+    render(
+      <TolariaFormattingToolbarController
+        formattingToolbar={() => <button data-testid="toolbar-action" type="button">Toolbar</button>}
+      />,
+    )
+
+    const toolbarWrapper = screen.getByTestId('toolbar-action').parentElement as HTMLElement
+    const floatingOptions = positionPopoverState.lastProps?.useFloatingOptions as {
+      onOpenChange: (open: boolean, event: unknown, reason?: string) => void
+    }
+
+    floatingOptions.onOpenChange(true, undefined)
+    floatingOptions.onOpenChange(false, undefined)
+    floatingOptions.onOpenChange(false, undefined)
+    fireEvent.blur(toolbarWrapper, { relatedTarget: document.body })
+
+    expect(formattingToolbarStore.setState).toHaveBeenCalledTimes(1)
+    expect(formattingToolbarStore.setState).toHaveBeenCalledWith(false)
+  })
+
+  it('hides the floating toolbar while the editor is composing IME text', () => {
+    vi.useFakeTimers()
+    try {
+      const editor = createMockEditor('paragraph')
+      const editorInput = editor.domElement.firstElementChild as HTMLElement
+
+      useBlockNoteEditorMock.mockReturnValue(editor)
+
+      render(<TolariaFormattingToolbarController />)
+
+      expect(positionPopoverState.lastProps).toEqual(expect.objectContaining({
+        position: { from: 1, to: 5 },
+        useFloatingOptions: expect.objectContaining({ open: true }),
+      }))
+
+      act(() => {
+        fireEvent.compositionStart(editorInput)
+      })
+
+      expect(positionPopoverState.lastProps).toEqual(expect.objectContaining({
+        position: undefined,
+        useFloatingOptions: expect.objectContaining({ open: false }),
+      }))
+
+      act(() => {
+        fireEvent.compositionEnd(editorInput)
+      })
+
+      expect(positionPopoverState.lastProps).toEqual(expect.objectContaining({
+        position: undefined,
+        useFloatingOptions: expect.objectContaining({ open: false }),
+      }))
+
+      act(() => {
+        vi.advanceTimersByTime(250)
+      })
+
+      expect(positionPopoverState.lastProps).toEqual(expect.objectContaining({
+        position: { from: 1, to: 5 },
+        useFloatingOptions: expect.objectContaining({ open: true }),
+      }))
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+
+  it('keeps the floating toolbar hidden through rapid Zhuyin composition settle cycles', () => {
+    vi.useFakeTimers()
+    try {
+      const editor = createMockEditor('paragraph')
+      const editorInput = editor.domElement.firstElementChild as HTMLElement
+
+      useBlockNoteEditorMock.mockReturnValue(editor)
+
+      render(<TolariaFormattingToolbarController />)
+
+      act(() => {
+        fireEvent.compositionStart(editorInput)
+        fireEvent.compositionEnd(editorInput)
+      })
+
+      expect(positionPopoverState.lastProps).toEqual(expect.objectContaining({
+        position: undefined,
+        useFloatingOptions: expect.objectContaining({ open: false }),
+      }))
+
+      act(() => {
+        vi.advanceTimersByTime(120)
+        fireEvent.compositionStart(editorInput)
+        fireEvent.compositionEnd(editorInput)
+      })
+
+      expect(positionPopoverState.lastProps).toEqual(expect.objectContaining({
+        position: undefined,
+        useFloatingOptions: expect.objectContaining({ open: false }),
+      }))
+
+      act(() => {
+        vi.advanceTimersByTime(249)
+      })
+
+      expect(positionPopoverState.lastProps).toEqual(expect.objectContaining({
+        position: undefined,
+        useFloatingOptions: expect.objectContaining({ open: false }),
+      }))
+
+      act(() => {
+        vi.advanceTimersByTime(1)
+      })
+
+      expect(positionPopoverState.lastProps).toEqual(expect.objectContaining({
+        position: { from: 1, to: 5 },
+        useFloatingOptions: expect.objectContaining({ open: true }),
+      }))
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+
+  it('ignores composition events that start outside the editor', () => {
+    const editor = createMockEditor('paragraph')
+    const outsideInput = document.createElement('input')
+    document.body.appendChild(outsideInput)
+
+    useBlockNoteEditorMock.mockReturnValue(editor)
+
+    render(<TolariaFormattingToolbarController />)
+
+    act(() => {
+      fireEvent.compositionStart(outsideInput)
+    })
+
+    expect(positionPopoverState.lastProps).toEqual(expect.objectContaining({
+      position: { from: 1, to: 5 },
+      useFloatingOptions: expect.objectContaining({ open: true }),
+    }))
+  })
+
+  it('binds composition listeners after BlockNote provides its editor element', () => {
+    const editor = createMockEditor('paragraph')
+    const lateEditorElement = editor.domElement
+    const editorInput = lateEditorElement.firstElementChild as HTMLElement
+
+    editor.domElement = undefined as unknown as HTMLElement
+    useBlockNoteEditorMock.mockReturnValue(editor)
+
+    const { rerender } = render(<TolariaFormattingToolbarController />)
+
+    expect(positionPopoverState.lastProps).toEqual(expect.objectContaining({
+      position: undefined,
+      useFloatingOptions: expect.objectContaining({ open: false }),
+    }))
+
+    editor.domElement = lateEditorElement
+    rerender(<TolariaFormattingToolbarController />)
+
+    expect(positionPopoverState.lastProps).toEqual(expect.objectContaining({
+      position: { from: 1, to: 5 },
+      useFloatingOptions: expect.objectContaining({ open: true }),
+    }))
+
+    act(() => {
+      fireEvent.compositionStart(editorInput)
+    })
+
+    expect(positionPopoverState.lastProps).toEqual(expect.objectContaining({
+      position: undefined,
+      useFloatingOptions: expect.objectContaining({ open: false }),
+    }))
   })
 
   it('does not open the floating toolbar when the editor anchor element is unavailable', () => {

@@ -2,7 +2,7 @@ import type { ComponentProps, ReactElement } from 'react'
 import { render as rtlRender, screen, fireEvent } from '@testing-library/react'
 import { describe, it, expect, vi } from 'vitest'
 import { Inspector } from './Inspector'
-import type { VaultEntry, GitCommit } from '../types'
+import type { VaultEntry, GitCommit, WorkspaceIdentity } from '../types'
 import { TooltipProvider } from '@/components/ui/tooltip'
 
 function render(ui: ReactElement) {
@@ -108,11 +108,27 @@ function renderSelectedInspector(overrides: Partial<InspectorProps> = {}) {
   })
 }
 
+function makeWorkspace(path: string, label: string, alias = label.toLowerCase()): WorkspaceIdentity {
+  return {
+    id: alias,
+    label,
+    alias,
+    path,
+    shortLabel: label.slice(0, 2).toUpperCase(),
+    color: null,
+    icon: null,
+    mounted: true,
+    available: true,
+    defaultForNewNotes: false,
+  }
+}
+
 describe('Inspector', () => {
   it('renders expanded state with "no note selected"', () => {
     render(<Inspector {...defaultProps} />)
     // Header now says "Properties" (not "Inspector")
     expect(screen.getAllByText('Properties').length).toBeGreaterThan(0)
+    expect(screen.getByTestId('properties-panel-icon')).toBeInTheDocument()
     expect(screen.getByText('No note selected')).toBeInTheDocument()
   })
 
@@ -122,11 +138,40 @@ describe('Inspector', () => {
     expect(screen.queryByText('No note selected')).not.toBeInTheDocument()
   })
 
-  it('calls onToggle when toggle button clicked', () => {
+  it('calls onToggle when the close button is clicked', () => {
     const onToggle = vi.fn()
     render(<Inspector {...defaultProps} onToggle={onToggle} />)
-    fireEvent.click(screen.getByRole('button'))
+    fireEvent.click(screen.getAllByRole('button', { name: 'Close Properties (⌘⇧I)' })[1])
     expect(onToggle).toHaveBeenCalledOnce()
+  })
+
+  it('closes when the properties sidebar icon is clicked', () => {
+    const onToggle = vi.fn()
+    render(<Inspector {...defaultProps} onToggle={onToggle} />)
+
+    fireEvent.click(screen.getAllByRole('button', { name: 'Close Properties (⌘⇧I)' })[0])
+
+    expect(onToggle).toHaveBeenCalledOnce()
+  })
+
+  it('shows a colliding-properties warning that opens the raw editor', async () => {
+    const onToggleRawEditor = vi.fn()
+    const content = `---
+type: Note
+status: Active
+Status: Evergreened
+---
+# Test Project
+`
+
+    renderSelectedInspector({ content, onToggleRawEditor })
+
+    const warning = screen.getByRole('button', { name: 'Colliding properties. Open raw editor.' })
+    fireEvent.focus(warning)
+    expect(await screen.findByRole('tooltip')).toHaveTextContent('Colliding properties')
+
+    fireEvent.click(warning)
+    expect(onToggleRawEditor).toHaveBeenCalledOnce()
   })
 
   it('shows properties when a note is selected', () => {
@@ -155,6 +200,44 @@ describe('Inspector', () => {
     render(<Inspector {...defaultProps} entry={mockEntry} content={mockContent} />)
     const btn = screen.getByRole('button', { name: 'Add property' })
     expect(btn).toBeDisabled()
+  })
+
+  it('guards delete property callbacks against stale active notes', () => {
+    const onDeleteProperty = vi.fn().mockResolvedValue(undefined)
+    renderSelectedInspector({ onDeleteProperty })
+
+    fireEvent.click(screen.getAllByTitle('Delete property')[0])
+
+    expect(onDeleteProperty).toHaveBeenCalledWith(
+      mockEntry.path,
+      'Status',
+      { requireActivePath: mockEntry.path },
+    )
+  })
+
+  it('infers the current workspace for untagged default-vault notes before moving them', () => {
+    const laputaWorkspace = makeWorkspace('/Users/luca/Laputa', 'Laputa')
+    const refactoringWorkspace = makeWorkspace('/Users/luca/Refactoring', 'Refactoring')
+    const entry = {
+      ...mockEntry,
+      path: '/Users/luca/Laputa/project/test.md',
+      workspace: undefined,
+    }
+    const onChangeWorkspace = vi.fn()
+
+    renderSelectedInspector({
+      entry,
+      workspaces: [laputaWorkspace, refactoringWorkspace],
+      onChangeWorkspace,
+    })
+
+    fireEvent.pointerDown(screen.getByRole('combobox', { name: 'Laputa' }), { button: 0, pointerType: 'mouse' })
+    fireEvent.click(screen.getByRole('option', { name: 'Refactoring' }))
+
+    expect(onChangeWorkspace).toHaveBeenCalledWith(
+      expect.objectContaining({ path: entry.path, workspace: laputaWorkspace }),
+      refactoringWorkspace,
+    )
   })
 
   it('shows cadence when present', () => {
@@ -632,6 +715,29 @@ Status: Active
       )
       fireEvent.click(screen.getByText('Initialize properties'))
       expect(onInit).toHaveBeenCalledWith('/vault/plain-note.md')
+    })
+
+    it('does not offer frontmatter initialization for binary attachments', () => {
+      const onInit = vi.fn()
+      const attachmentEntry: VaultEntry = {
+        ...noFrontmatterEntry,
+        path: '/vault/attachments/screenshot.png',
+        filename: 'screenshot.png',
+        title: 'screenshot.png',
+        fileKind: 'binary',
+      }
+
+      render(
+        <Inspector
+          {...defaultProps}
+          entry={attachmentEntry}
+          content=""
+          onInitializeProperties={onInit}
+        />
+      )
+
+      expect(screen.queryByText('Initialize properties')).not.toBeInTheDocument()
+      expect(onInit).not.toHaveBeenCalled()
     })
 
     it('shows invalid frontmatter notice with fix button', () => {

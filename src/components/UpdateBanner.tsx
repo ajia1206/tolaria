@@ -1,13 +1,14 @@
 import type { CSSProperties } from 'react'
-import { Download, ExternalLink, RefreshCw, X } from 'lucide-react'
+import { ArrowSquareOut as ExternalLink, ArrowsClockwise as RefreshCw, Download, X } from '@phosphor-icons/react'
 import type { UpdateStatus, UpdateActions } from '../hooks/useUpdater'
 import { restartApp } from '../hooks/useUpdater'
 import { Button } from './ui/button'
-import { useI18n } from '../lib/useI18n'
+import { translate, type AppLocale } from '../lib/i18n'
 
 interface UpdateBannerProps {
   status: UpdateStatus
   actions: UpdateActions
+  locale?: AppLocale
 }
 
 type VisibleUpdateStatus = Exclude<UpdateStatus, { state: 'idle' } | { state: 'error' }>
@@ -63,16 +64,12 @@ const readyIconStyle = {
   flexShrink: 0,
 } satisfies CSSProperties
 
-function renderAvailableContent(
-  status: Extract<VisibleUpdateStatus, { state: 'available' }>,
-  actions: UpdateActions,
-  t: ReturnType<typeof useI18n>['t'],
-) {
+function renderAvailableContent(status: Extract<VisibleUpdateStatus, { state: 'available' }>, actions: UpdateActions, locale: AppLocale) {
   return (
     <>
       <Download size={14} style={iconStyle} />
       <span>
-        <strong>{t('update.available', { version: status.displayVersion })}</strong>
+        <strong>Tolaria {status.displayVersion}</strong> {translate(locale, 'update.available')}
       </span>
       <Button
         type="button"
@@ -82,7 +79,7 @@ function renderAvailableContent(
         onClick={actions.openReleaseNotes}
         style={{ color: 'var(--text-inverse)', padding: 0, height: 'auto' }}
       >
-        {t('update.releaseNotes')} <ExternalLink size={11} />
+        {translate(locale, 'update.releaseNotes')} <ExternalLink size={11} />
       </Button>
       <Button
         type="button"
@@ -91,7 +88,7 @@ function renderAvailableContent(
         onClick={actions.startDownload}
         style={primaryActionStyle}
       >
-        {t('update.now')}
+        {translate(locale, 'update.updateNow')}
       </Button>
       <Button
         type="button"
@@ -100,7 +97,7 @@ function renderAvailableContent(
         data-testid="update-dismiss"
         onClick={actions.dismiss}
         style={dismissButtonStyle}
-        aria-label={t('update.dismiss')}
+        aria-label={translate(locale, 'update.dismiss')}
       >
         <X size={14} />
       </Button>
@@ -108,14 +105,20 @@ function renderAvailableContent(
   )
 }
 
-function renderDownloadingContent(
-  status: Extract<VisibleUpdateStatus, { state: 'downloading' }>,
-  t: ReturnType<typeof useI18n>['t'],
-) {
+function renderCheckingContent(locale: AppLocale) {
   return (
     <>
       <RefreshCw size={14} style={{ ...iconStyle, animation: 'spin 1s linear infinite' }} />
-      <span>{t('update.downloading', { version: status.displayVersion })}</span>
+      <span>{translate(locale, 'update.checking')}</span>
+    </>
+  )
+}
+
+function renderDownloadingContent(status: Extract<VisibleUpdateStatus, { state: 'downloading' }>, locale: AppLocale) {
+  return (
+    <>
+      <RefreshCw size={14} style={{ ...iconStyle, animation: 'spin 1s linear infinite' }} />
+      <span>{translate(locale, 'update.downloading', { version: status.displayVersion })}</span>
       <div style={progressTrackStyle}>
         <div
           data-testid="update-progress"
@@ -133,15 +136,12 @@ function renderDownloadingContent(
   )
 }
 
-function renderReadyContent(
-  status: Extract<VisibleUpdateStatus, { state: 'ready' }>,
-  t: ReturnType<typeof useI18n>['t'],
-) {
+function renderReadyContent(status: Extract<VisibleUpdateStatus, { state: 'ready' }>, locale: AppLocale) {
   return (
     <>
       <RefreshCw size={14} style={readyIconStyle} />
       <span>
-        <strong>{t('update.ready', { version: status.displayVersion })}</strong>
+        <strong>Tolaria {status.displayVersion}</strong> {translate(locale, 'update.readyRestart')}
       </span>
       <Button
         type="button"
@@ -154,26 +154,27 @@ function renderReadyContent(
           color: 'var(--text-inverse)',
         }}
       >
-        {t('update.restartNow')}
+        {translate(locale, 'update.restartNow')}
       </Button>
     </>
   )
 }
 
-function renderBannerContent(status: VisibleUpdateStatus, actions: UpdateActions, t: ReturnType<typeof useI18n>['t']) {
+function renderBannerContent(status: VisibleUpdateStatus, actions: UpdateActions, locale: AppLocale) {
   switch (status.state) {
+    case 'checking':
+      return renderCheckingContent(locale)
     case 'available':
-      return renderAvailableContent(status, actions, t)
+      return renderAvailableContent(status, actions, locale)
     case 'downloading':
-      return renderDownloadingContent(status, t)
+      return renderDownloadingContent(status, locale)
     case 'ready':
-      return renderReadyContent(status, t)
+      return renderReadyContent(status, locale)
   }
 }
 
-export function UpdateBanner({ status, actions }: UpdateBannerProps) {
-  const { t } = useI18n()
+export function UpdateBanner({ status, actions, locale = 'en' }: UpdateBannerProps) {
   if (status.state === 'idle' || status.state === 'error') return null
 
-  return <div data-testid="update-banner" style={bannerStyle}>{renderBannerContent(status, actions, t)}</div>
+  return <div data-testid="update-banner" style={bannerStyle}>{renderBannerContent(status, actions, locale)}</div>
 }

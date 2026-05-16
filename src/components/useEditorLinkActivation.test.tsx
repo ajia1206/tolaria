@@ -4,22 +4,33 @@ import { beforeEach, describe, expect, it, vi } from 'vitest'
 
 vi.mock('../utils/url', async () => {
   const actual = await vi.importActual('../utils/url') as typeof import('../utils/url')
-  return { ...actual, openExternalUrl: vi.fn().mockResolvedValue(undefined) }
+  return {
+    ...actual,
+    openExternalUrl: vi.fn().mockResolvedValue(undefined),
+    openLocalFile: vi.fn().mockResolvedValue(undefined),
+  }
 })
 
-import { openExternalUrl } from '../utils/url'
+import { openExternalUrl, openLocalFile } from '../utils/url'
 import { useEditorLinkActivation } from './useEditorLinkActivation'
 
 const mockOpenExternalUrl = vi.mocked(openExternalUrl)
+const mockOpenLocalFile = vi.mocked(openLocalFile)
 
-function Harness({ onNavigateWikilink }: { onNavigateWikilink: (target: string) => void }) {
+function Harness({
+  onNavigateWikilink,
+  vaultPath,
+}: {
+  onNavigateWikilink: (target: string) => void
+  vaultPath?: string
+}) {
   const containerRef = useRef<HTMLDivElement>(null)
-  useEditorLinkActivation(containerRef, onNavigateWikilink)
+  useEditorLinkActivation(containerRef, onNavigateWikilink, vaultPath)
   return <div ref={containerRef} data-testid="editor-link-container" />
 }
 
-function renderHarness(onNavigateWikilink = vi.fn()) {
-  render(<Harness onNavigateWikilink={onNavigateWikilink} />)
+function renderHarness(onNavigateWikilink = vi.fn(), vaultPath?: string) {
+  render(<Harness onNavigateWikilink={onNavigateWikilink} vaultPath={vaultPath} />)
   return {
     container: screen.getByTestId('editor-link-container') as HTMLDivElement,
     onNavigateWikilink,
@@ -46,30 +57,54 @@ function appendUrl(container: HTMLElement, href: string) {
   const link = document.createElement('a')
   link.setAttribute('href', href)
   link.textContent = href
-  link.addEventListener('click', (event) => {
-    if (!(event as MouseEvent).metaKey) event.preventDefault()
-  })
   container.appendChild(link)
   return link
+}
+
+function dispatchMouseEvent(target: Node, type: string, options: MouseEventInit = {}) {
+  const event = new MouseEvent(type, {
+    bubbles: true,
+    cancelable: true,
+    ...options,
+  })
+  target.dispatchEvent(event)
+  return event
 }
 
 describe('useEditorLinkActivation', () => {
   beforeEach(() => {
     mockOpenExternalUrl.mockClear()
+    mockOpenLocalFile.mockClear()
   })
 
-  it('navigates wikilinks only on Cmd+click', () => {
+  it('navigates wikilinks only on Cmd+click after the native click stack settles', async () => {
     const { container, onNavigateWikilink } = renderHarness()
     const wikilink = appendWikilink(container, 'Alpha Project')
 
-    fireEvent.click(wikilink)
+    dispatchMouseEvent(wikilink, 'click')
     expect(onNavigateWikilink).not.toHaveBeenCalled()
 
-    fireEvent.click(wikilink, { metaKey: true })
+    const modifiedClick = dispatchMouseEvent(wikilink, 'click', { metaKey: true })
+    expect(modifiedClick.defaultPrevented).toBe(true)
+    expect(onNavigateWikilink).not.toHaveBeenCalled()
+
+    await Promise.resolve()
     expect(onNavigateWikilink).toHaveBeenCalledWith('Alpha Project')
   })
 
-  it('blurs an active editor before navigating a Cmd-clicked wikilink', () => {
+  it('consumes plain wikilink mousedown and click events before editor internals see stale link nodes', () => {
+    const { container, onNavigateWikilink } = renderHarness()
+    const wikilink = appendWikilink(container, 'Alpha Project')
+
+    const mouseDown = dispatchMouseEvent(wikilink, 'mousedown')
+    const click = dispatchMouseEvent(wikilink, 'click')
+
+    expect(mouseDown.defaultPrevented).toBe(true)
+    expect(click.defaultPrevented).toBe(true)
+    expect(onNavigateWikilink).not.toHaveBeenCalled()
+  })
+
+  it('blurs an active editor before navigating a Cmd-clicked wikilink', async () => {
     const { container, onNavigateWikilink } = renderHarness()
     const { editable, wikilink } = appendEditableWikilink(container, 'Alpha Project')
 
@@ -78,19 +113,81 @@ describe('useEditorLinkActivation', () => {
 
     fireEvent.click(wikilink, { metaKey: true })
 
-    expect(onNavigateWikilink).toHaveBeenCalledWith('Alpha Project')
     expect(document.activeElement).not.toBe(editable)
+    await Promise.resolve()
+    expect(onNavigateWikilink).toHaveBeenCalledWith('Alpha Project')
   })
 
   it('opens URLs only on Cmd+click', () => {
     const { container } = renderHarness()
     const link = appendUrl(container, 'https://example.com')
 
-    fireEvent.click(link)
+    const plainClick = dispatchMouseEvent(link, 'click')
     expect(mockOpenExternalUrl).not.toHaveBeenCalled()
+    expect(plainClick.defaultPrevented).toBe(true)
 
-    fireEvent.click(link, { metaKey: true })
+    const modifiedClick = dispatchMouseEvent(link, 'click', { metaKey: true })
     expect(mockOpenExternalUrl).toHaveBeenCalledWith('https://example.com')
+    expect(modifiedClick.defaultPrevented).toBe(true)
+  })
+
+  it('opens modified URL mousedown before editor internals see stale link nodes', () => {
+    const { container } = renderHarness()
+    const link = appendUrl(container, 'https://example.com')
+    const targetMouseDown = vi.fn()
+    link.addEventListener('mousedown', targetMouseDown)
+
+    const plainMouseDown = dispatchMouseEvent(link, 'mousedown')
+    expect(plainMouseDown.defaultPrevented).toBe(false)
+    expect(targetMouseDown).toHaveBeenCalledOnce()
+    targetMouseDown.mockClear()
+
+    const modifiedMouseDown = dispatchMouseEvent(link, 'mousedown', { metaKey: true })
+
+    expect(modifiedMouseDown.defaultPrevented).toBe(true)
+    expect(targetMouseDown).not.toHaveBeenCalled()
+    const click = dispatchMouseEvent(link, 'click', { metaKey: true })
+
+    expect(click.defaultPrevented).toBe(true)
+    expect(mockOpenExternalUrl).toHaveBeenCalledOnce()
+    expect(mockOpenExternalUrl).toHaveBeenCalledWith('https://example.com')
+  })
+
+  it('handles URL events that originate on link text nodes', () => {
+    const { container } = renderHarness()
+    const link = appendUrl(container, 'https://example.com')
+    const textNode = link.firstChild
+    expect(textNode).toBeInstanceOf(Text)
+
+    dispatchMouseEvent(textNode!, 'mousedown', { metaKey: true })
+    const click = dispatchMouseEvent(textNode!, 'click', { metaKey: true })
+
+    expect(click.defaultPrevented).toBe(true)
+    expect(mockOpenExternalUrl).toHaveBeenCalledOnce()
+    expect(mockOpenExternalUrl).toHaveBeenCalledWith('https://example.com')
+  })
+
+  it('blocks malformed URL anchors instead of opening or falling through', () => {
+    const { container } = renderHarness()
+    const link = appendUrl(container, 'https://exa mple.com')
+
+    const plainClick = dispatchMouseEvent(link, 'click')
+    const modifiedClick = dispatchMouseEvent(link, 'click', { metaKey: true })
+
+    expect(plainClick.defaultPrevented).toBe(true)
+    expect(modifiedClick.defaultPrevented).toBe(true)
+    expect(mockOpenExternalUrl).not.toHaveBeenCalled()
+  })
+
+  it('opens relative attachment links through the active vault path', () => {
+    const { container } = renderHarness(vi.fn(), '/vault')
+    const link = appendUrl(container, 'attachments/report.pdf')
+
+    const modifiedClick = dispatchMouseEvent(link, 'click', { metaKey: true })
+
+    expect(modifiedClick.defaultPrevented).toBe(true)
+    expect(mockOpenLocalFile).toHaveBeenCalledWith('/vault/attachments/report.pdf', '/vault')
+    expect(mockOpenExternalUrl).not.toHaveBeenCalled()
   })
 
   it('ignores malformed URLs and links inside code blocks', () => {

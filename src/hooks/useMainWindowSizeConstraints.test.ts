@@ -23,7 +23,7 @@ describe('getMainWindowMinWidth', () => {
         noteListVisible: true,
         inspectorCollapsed: true,
       },
-      expectedWidth: 880,
+      expectedWidth: 920,
     },
     {
       name: 'drops to the narrower editor-only floor when only the editor is visible',
@@ -51,6 +51,18 @@ describe('getMainWindowMinWidth', () => {
         inspectorCollapsed: false,
       },
       expectedWidth: 720,
+    },
+    {
+      name: 'uses restored pane widths when they exceed the minimum allowances',
+      visibility: {
+        sidebarVisible: true,
+        noteListVisible: true,
+        inspectorCollapsed: false,
+        sidebarWidth: 360,
+        noteListWidth: 340,
+        inspectorWidth: 320,
+      },
+      expectedWidth: 1500,
     },
   ] as const
 
@@ -82,7 +94,7 @@ describe('useMainWindowSizeConstraints', () => {
         noteListVisible: true,
         inspectorCollapsed: false,
       },
-      expectedWidth: 1120,
+      expectedWidth: 1160,
     },
   ] as const
 
@@ -112,12 +124,57 @@ describe('useMainWindowSizeConstraints', () => {
   })
 
   it('sends the grow-to-fit payload through the native command helper', async () => {
-    await applyMainWindowSizeConstraints(1200)
+    await applyMainWindowSizeConstraints(1200, { growToFit: false })
 
     expect(invoke).toHaveBeenCalledWith('update_current_window_min_size', {
       minWidth: 1200,
       minHeight: 400,
-      growToFit: true,
+      growToFit: false,
+    })
+  })
+
+  it('does not request native grow-to-fit on Windows', async () => {
+    const originalUserAgent = navigator.userAgent
+    Object.defineProperty(window.navigator, 'userAgent', {
+      configurable: true,
+      value: 'Mozilla/5.0 (Windows NT 10.0; Win64; x64)',
+    })
+
+    try {
+      renderHook(() => useMainWindowSizeConstraints({
+        sidebarVisible: true,
+        noteListVisible: true,
+        inspectorCollapsed: false,
+      }))
+
+      await waitFor(() => {
+        expect(invoke).toHaveBeenCalledWith('update_current_window_min_size', {
+          minWidth: 1160,
+          minHeight: 400,
+          growToFit: false,
+        })
+      })
+    } finally {
+      Object.defineProperty(window.navigator, 'userAgent', {
+        configurable: true,
+        value: originalUserAgent,
+      })
+    }
+  })
+
+  it('keeps grow-to-fit enabled on non-Windows platforms', async () => {
+    renderHook(() => useMainWindowSizeConstraints({
+      sidebarVisible: true,
+      noteListVisible: true,
+      inspectorCollapsed: false,
+    }))
+
+    await waitFor(() => {
+      expect(invoke).toHaveBeenCalledWith('update_current_window_min_size', {
+        minWidth: 1160,
+        minHeight: 400,
+        growToFit: true,
+      })
     })
   })
 })

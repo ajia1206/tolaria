@@ -1,7 +1,14 @@
-import type { SidebarSelection } from '../types'
+import type { SidebarSelection, VaultEntry } from '../types'
 
 const NOTE_LIST_CONTAINER_SELECTOR = '[data-testid="note-list-container"]'
 const EDITOR_SURFACE_SELECTOR = '.editor__blocknote-container, .cm-editor'
+
+export type NeighborhoodSelectionAction = 'enter' | 'switch' | 'exit'
+
+export interface NeighborhoodSelectionUpdate {
+  action: NeighborhoodSelectionAction
+  selection: SidebarSelection
+}
 
 function isSameFilterSelection(a: Extract<SidebarSelection, { kind: 'filter' }>, b: Extract<SidebarSelection, { kind: 'filter' }>) {
   return a.filter === b.filter
@@ -20,7 +27,7 @@ function isSameEntitySelection(a: Extract<SidebarSelection, { kind: 'entity' }>,
 }
 
 function isSameViewSelection(a: Extract<SidebarSelection, { kind: 'view' }>, b: Extract<SidebarSelection, { kind: 'view' }>) {
-  return a.filename === b.filename
+  return a.filename === b.filename && (a.rootPath ?? '') === (b.rootPath ?? '')
 }
 
 export function selectionsEqual(a: SidebarSelection, b: SidebarSelection): boolean {
@@ -47,6 +54,21 @@ export function pushNeighborhoodHistory(
 ): SidebarSelection[] {
   if (selectionsEqual(currentSelection, nextSelection)) return history
   return [...history, currentSelection]
+}
+
+export function resolveNeighborhoodSelection(
+  currentSelection: SidebarSelection,
+  entry: VaultEntry,
+): NeighborhoodSelectionUpdate {
+  const nextSelection: SidebarSelection = { kind: 'entity', entry }
+  if (selectionsEqual(currentSelection, nextSelection)) {
+    return { action: 'exit', selection: { kind: 'filter', filter: 'all' } }
+  }
+
+  return {
+    action: currentSelection.kind === 'entity' ? 'switch' : 'enter',
+    selection: nextSelection,
+  }
 }
 
 export function popNeighborhoodHistory(history: SidebarSelection[]) {

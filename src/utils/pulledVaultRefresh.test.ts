@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from 'vitest'
 import type { VaultEntry } from '../types'
-import { refreshPulledVaultState } from './pulledVaultRefresh'
+import { getPulledVaultUpdateOptions, refreshPulledVaultState } from './pulledVaultRefresh'
 
 function makeEntry(path: string, title = 'Test note'): VaultEntry {
   return {
@@ -30,6 +30,10 @@ function makeOptions(overrides: Partial<Parameters<typeof refreshPulledVaultStat
 }
 
 describe('refreshPulledVaultState', () => {
+  it('marks pull-originated vault updates as focused-editor preserving', () => {
+    expect(getPulledVaultUpdateOptions()).toEqual({ preserveFocusedEditor: true })
+  })
+
   it('reloads vault-derived data and refreshes the active note when pull updated it', async () => {
     const options = makeOptions()
 
@@ -43,14 +47,24 @@ describe('refreshPulledVaultState', () => {
     expect(options.replaceActiveTab).toHaveBeenCalledWith(entries[0])
   })
 
-  it('reloads the active tab after any successful pull with updates', async () => {
+  it('keeps the active tab mounted when updates do not include the active note', async () => {
     const options = makeOptions({ updatedFiles: ['project/plan.md'] })
 
     await refreshPulledVaultState(options)
 
     expect(options.reloadVault).toHaveBeenCalledOnce()
     expect(options.closeAllTabs).not.toHaveBeenCalled()
-    expect(options.replaceActiveTab).toHaveBeenCalledWith(expect.objectContaining({ path: '/vault/active.md' }))
+    expect(options.replaceActiveTab).not.toHaveBeenCalled()
+  })
+
+  it('keeps the active tab mounted for full watcher refreshes with unknown changed files', async () => {
+    const options = makeOptions({ updatedFiles: [] })
+
+    await refreshPulledVaultState(options)
+
+    expect(options.reloadVault).toHaveBeenCalledOnce()
+    expect(options.closeAllTabs).not.toHaveBeenCalled()
+    expect(options.replaceActiveTab).not.toHaveBeenCalled()
   })
 
   it('matches macOS /tmp and /private/tmp aliases when reloading the active tab entry', async () => {
@@ -73,6 +87,58 @@ describe('refreshPulledVaultState', () => {
     })
 
     await refreshPulledVaultState(options)
+
+    expect(options.replaceActiveTab).not.toHaveBeenCalled()
+    expect(options.closeAllTabs).not.toHaveBeenCalled()
+  })
+
+  it('keeps the active tab mounted while the editor is focused', async () => {
+    const options = makeOptions({
+      shouldKeepActiveEditorMounted: vi.fn(() => true),
+    })
+
+    await refreshPulledVaultState(options)
+
+    expect(options.shouldKeepActiveEditorMounted).toHaveBeenCalledOnce()
+    expect(options.reloadVault).toHaveBeenCalledOnce()
+    expect(options.reloadFolders).toHaveBeenCalledOnce()
+    expect(options.reloadViews).toHaveBeenCalledOnce()
+    expect(options.replaceActiveTab).not.toHaveBeenCalled()
+    expect(options.closeAllTabs).not.toHaveBeenCalled()
+  })
+
+  it('retargets a focused active tab when the active note was moved externally', async () => {
+    const movedEntry = makeEntry('/vault/projects/active.md', 'Active')
+    const options = makeOptions({
+      activeTabPath: '/vault/active.md',
+      reloadVault: vi.fn().mockResolvedValue([movedEntry]),
+      shouldKeepActiveEditorMounted: vi.fn(() => true),
+      updatedFiles: ['active.md', 'projects/active.md'],
+    })
+
+    await refreshPulledVaultState(options)
+
+    expect(options.shouldKeepActiveEditorMounted).not.toHaveBeenCalled()
+    expect(options.closeAllTabs).toHaveBeenCalledOnce()
+    expect(options.replaceActiveTab).toHaveBeenCalledWith(movedEntry)
+  })
+
+  it('skips stale tab replacement when the active note changes during reload', async () => {
+    let resolveReload!: (entries: VaultEntry[]) => void
+    let currentActivePath: string | null = '/vault/active.md'
+    const options = makeOptions({
+      getActiveTabPath: () => currentActivePath,
+      reloadVault: vi.fn(() => new Promise<VaultEntry[]>((resolve) => {
+        resolveReload = resolve
+      })),
+    })
+
+    const refresh = refreshPulledVaultState(options)
+    await Promise.resolve()
+
+    currentActivePath = '/vault/other.md'
+    resolveReload([makeEntry('/vault/active.md', 'Active'), makeEntry('/vault/other.md', 'Other')])
+    await refresh
 
     expect(options.replaceActiveTab).not.toHaveBeenCalled()
     expect(options.closeAllTabs).not.toHaveBeenCalled()

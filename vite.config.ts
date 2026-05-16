@@ -1,7 +1,18 @@
 /// <reference types="vitest/config" />
 import type { IncomingMessage, ServerResponse } from 'http'
 import path from 'path'
-import fs from 'fs'
+import {
+  closeSync,
+  fstatSync,
+  mkdirSync,
+  openSync,
+  opendirSync,
+  readFileSync,
+  renameSync,
+  unlinkSync,
+  writeFileSync,
+  type Dirent,
+} from 'fs'
 import os from 'os'
 import { defineConfig, type Plugin } from 'vite'
 import react from '@vitejs/plugin-react'
@@ -48,18 +59,106 @@ function extractWikiLinks(value: string): string[] {
 
 /** Extract wiki-links from a frontmatter value (string or array of strings). */
 function wikiLinksFromValue(value: unknown): string[] {
-  if (typeof value === 'string') return extractWikiLinks(value)
-  if (Array.isArray(value)) {
-    return value.flatMap((v) => (typeof v === 'string' ? extractWikiLinks(v) : []))
-  }
-  return []
+  return collectWikiLinksFromValue(value, 0)
 }
 
-// Frontmatter keys that map to dedicated VaultEntry fields (skip in generic relationships)
+function collectWikiLinksFromValue(value: unknown, depth: number): string[] {
+  if (typeof value === 'string') return extractWikiLinks(value)
+  if (!Array.isArray(value)) return []
+
+  const nestedLink = nestedFlowWikilink(value, depth)
+  if (nestedLink) return [nestedLink]
+  return value.flatMap((item) => collectWikiLinksFromValue(item, depth + 1))
+}
+
+function nestedFlowWikilink(value: unknown[], depth: number): string | null {
+  if (depth === 0 || value.length !== 1 || typeof value[0] !== 'string') return null
+  return extractWikiLinks(value[0]).length === 0 ? `[[${value[0]}]]` : null
+}
+
+// Frontmatter keys that map to dedicated VaultEntry fields (skip in generic properties/relationships)
 const DEDICATED_KEYS = new Set([
-  'aliases', 'is_a', 'is a', 'belongs_to', 'belongs to',
-  'related_to', 'related to', 'status', 'title',
-])
+  'aliases', 'is_a', 'is a', 'type', 'status', 'title', '_archived',
+  'archived', '_icon', 'icon', 'color', '_order', 'order',
+  '_sidebar_label', 'sidebar_label', 'sidebar label', 'template',
+  '_sort', 'sort', 'view', '_width', 'width', 'visible',
+  '_organized', '_favorite', '_favorite_index', '_list_properties_display',
+].map((key) => key.toLowerCase()))
+
+type FrontmatterPropertyValue = string | number | boolean | null
+type VaultSearchResult = { title: string; path: string; snippet: string; score: number; note_type: string | null }
+
+interface SearchEntryInput {
+  entry: VaultEntry
+  query: string
+  rawContent: string
+}
+
+interface SearchRequestInput {
+  query: string
+  vaultPath: string
+}
+
+interface VaultCommandPayload {
+  args?: Record<string, unknown>
+  cmd?: string
+}
+
+interface VaultCommandContext {
+  args: Record<string, unknown>
+  cmd: string
+}
+
+interface VaultCommandResponse {
+  payload: unknown
+  statusCode?: number
+}
+
+type VaultCommandHandler = (context: VaultCommandContext) => VaultCommandResponse
+
+interface CommandStringInput {
+  args: Record<string, unknown>
+  key: string
+}
+
+interface CommandResponseInput {
+  payload: unknown
+  statusCode?: number
+}
+
+interface VaultReadCommandInput {
+  cmd: string
+  pathname: string
+  req: IncomingMessage
+  res: ServerResponse
+  url: URL
+}
+
+interface TitleWikilinkUpdateInput {
+  excludePath: string
+  oldTitle: string
+  vaultPath: string
+}
+
+interface LegacyWikilinkTargetInput {
+  oldPath: string
+  oldTitle: string
+  vaultPath: string
+}
+
+interface WikilinkTargetUpdateInput {
+  excludePath: string
+  newTarget: string
+  oldTargets: string[]
+  vaultPath: string
+}
+
+interface PathWikilinkUpdateInput {
+  newPath: string
+  oldPath: string
+  oldTitle: string
+  vaultPath: string
+}
 
 function getFrontmatterValue(
   frontmatter: Record<string, unknown>,
@@ -95,6 +194,68 @@ const devServerWatchIgnored = [
   '**/dist/**',
   '**/src-tauri/target/**',
 ]
+
+function readUtf8File(filePath: string): string {
+  const fd = openSync(filePath, 'r')
+  try {
+    return readFileSync(fd, 'utf-8')
+  } finally {
+    closeSync(fd)
+  }
+}
+
+function writeUtf8File(filePath: string, content: string): void {
+  const fd = openSync(filePath, 'w')
+  try {
+    writeFileSync(fd, content, 'utf-8')
+  } finally {
+    closeSync(fd)
+  }
+}
+
+function pathStats(filePath: string) {
+  const fd = openSync(filePath, 'r')
+  try {
+    return fstatSync(fd)
+  } finally {
+    closeSync(fd)
+  }
+}
+
+function pathExists(filePath: string): boolean {
+  try {
+    pathStats(filePath)
+    return true
+  } catch {
+    return false
+  }
+}
+
+function directoryEntries(dir: string): Dirent[] {
+  const directory = opendirSync(dir)
+  try {
+    const entries: Dirent[] = []
+    let entry = directory.readSync()
+    while (entry) {
+      entries.push(entry)
+      entry = directory.readSync()
+    }
+    return entries
+  } finally {
+    directory.closeSync()
+  }
+}
+
+function isInsideRelativePath(relative: string): boolean {
+  return relative === '' || (!relative.startsWith('..') && !path.isAbsolute(relative))
+}
+
+function resolveInside(root: string, target: string): string | null {
+  const normalizedTarget = path.normalize(target)
+  if (path.isAbsolute(normalizedTarget)) return null
+  const candidate = path.normalize(`${root}${path.sep}${normalizedTarget}`)
+  return isInsideRelativePath(path.relative(root, candidate)) ? candidate : null
+}
 
 function frontmatterString(frontmatter: Record<string, unknown>, ...keys: string[]): string | null {
   const value = getFrontmatterValue(frontmatter, keys)
@@ -138,10 +299,42 @@ function frontmatterRelationships(frontmatter: Record<string, unknown>): Record<
   return relationships
 }
 
+function frontmatterProperties(frontmatter: Record<string, unknown>): Record<string, FrontmatterPropertyValue> {
+  const properties: Record<string, FrontmatterPropertyValue> = {}
+  for (const [key, value] of Object.entries(frontmatter)) {
+    if (DEDICATED_KEYS.has(key.toLowerCase()) || key.trim().startsWith('_')) continue
+    const propertyValue = frontmatterPropertyValue(value)
+    if (propertyValue !== undefined) properties[key] = propertyValue
+  }
+  return properties
+}
+
+function isScalarFrontmatterProperty(value: unknown): value is number | boolean {
+  return typeof value === 'number' || typeof value === 'boolean'
+}
+
+function singleStringArrayValue(value: unknown): string | undefined {
+  if (!Array.isArray(value)) return undefined
+  if (value.length !== 1) return undefined
+  return typeof value[0] === 'string' ? value[0] : undefined
+}
+
+function wikiLinkFreeString(value: string): string | undefined {
+  return extractWikiLinks(value).length === 0 ? value : undefined
+}
+
+function frontmatterPropertyValue(value: unknown): FrontmatterPropertyValue | undefined {
+  if (value === null) return null
+  if (isScalarFrontmatterProperty(value)) return value
+  if (typeof value === 'string') return wikiLinkFreeString(value)
+  const singleArrayValue = singleStringArrayValue(value)
+  return singleArrayValue === undefined ? undefined : wikiLinkFreeString(singleArrayValue)
+}
+
 function parseMarkdownFile(filePath: string): VaultEntry | null {
   try {
-    const raw = fs.readFileSync(filePath, 'utf-8')
-    const stats = fs.statSync(filePath)
+    const raw = readUtf8File(filePath)
+    const stats = pathStats(filePath)
     const { data, content } = matter(raw)
     const fm = data as Record<string, unknown>
 
@@ -179,7 +372,7 @@ function parseMarkdownFile(filePath: string): VaultEntry | null {
       view: frontmatterString(fm, 'view'),
       visible: frontmatterBool(fm, 'visible'),
       outgoingLinks: [],
-      properties: {},
+      properties: frontmatterProperties(fm),
     }
   } catch {
     return null
@@ -190,10 +383,11 @@ function parseMarkdownFile(filePath: string): VaultEntry | null {
 function findMarkdownFiles(dir: string): string[] {
   const results: string[] = []
   try {
-    const items = fs.readdirSync(dir, { withFileTypes: true })
+    const items = directoryEntries(dir)
     for (const item of items) {
       if (item.name.startsWith('.')) continue
-      const full = path.join(dir, item.name)
+      const full = resolveInside(dir, item.name)
+      if (!full) continue
       if (item.isDirectory()) {
         results.push(...findMarkdownFiles(full))
       } else if (item.name.endsWith('.md')) {
@@ -212,42 +406,209 @@ function sendJson(res: ServerResponse, payload: unknown, statusCode = 200): void
   res.end(JSON.stringify(payload))
 }
 
-function readExistingQueryPath(url: URL, res: ServerResponse, key: string): string | null {
-  const filePath = url.searchParams.get(key)
-  if (!filePath || !fs.existsSync(filePath)) {
-    sendJson(res, { error: 'Invalid or missing path' }, 400)
-    return null
+function commandString({ args, key }: CommandStringInput): string | null {
+  const value = Reflect.get(args, key)
+  return typeof value === 'string' && value.length > 0 ? value : null
+}
+
+function commandResponse({ payload, statusCode = 200 }: CommandResponseInput): VaultCommandResponse {
+  return { payload, statusCode }
+}
+
+function invalidPathResponse(): VaultCommandResponse {
+  return commandResponse({ payload: { error: 'Invalid or missing path' }, statusCode: 400 })
+}
+
+function existingCommandPath(input: CommandStringInput): string | null {
+  const filePath = commandString(input)
+  return filePath && pathExists(filePath) ? filePath : null
+}
+
+function commandVaultList({ args }: VaultCommandContext): VaultCommandResponse {
+  const dirPath = existingCommandPath({ args, key: 'path' })
+  if (!dirPath) return invalidPathResponse()
+
+  const entries = findMarkdownFiles(dirPath).map(parseMarkdownFile).filter(Boolean)
+  return commandResponse({ payload: entries })
+}
+
+function commandVaultContent({ args }: VaultCommandContext): VaultCommandResponse {
+  const filePath = existingCommandPath({ args, key: 'path' })
+  if (!filePath) return invalidPathResponse()
+  return commandResponse({ payload: { content: readUtf8File(filePath) } })
+}
+
+function commandVaultAllContent({ args }: VaultCommandContext): VaultCommandResponse {
+  const dirPath = existingCommandPath({ args, key: 'path' })
+  if (!dirPath) return invalidPathResponse()
+
+  const contentMap: Record<string, string> = {}
+  for (const filePath of findMarkdownFiles(dirPath)) {
+    try {
+      Reflect.set(contentMap, filePath, readUtf8File(filePath))
+    } catch {
+      // Skip unreadable files.
+    }
   }
-  return filePath
+  return commandResponse({ payload: contentMap })
 }
 
-function updateTitleWikilinks(vaultPath: string, oldTitle: string, _newTitle: string, excludePath: string): number {
+function commandVaultEntry({ args }: VaultCommandContext): VaultCommandResponse {
+  const filePath = existingCommandPath({ args, key: 'path' })
+  if (!filePath) return invalidPathResponse()
+  return commandResponse({ payload: parseMarkdownFile(filePath) })
+}
+
+function commandVaultSearch({ args }: VaultCommandContext): VaultCommandResponse {
+  const vaultPath = commandString({ args, key: 'vault_path' })
+  const query = (commandString({ args, key: 'query' }) ?? '').toLowerCase()
+  const mode = commandString({ args, key: 'mode' }) ?? 'all'
+  const results = vaultPath && query ? collectVaultSearchResults({ vaultPath, query }) : []
+  return commandResponse({ payload: { results, elapsed_ms: results.length > 0 ? 1 : 0, query, mode } })
+}
+
+function commandVaultSave({ args }: VaultCommandContext): VaultCommandResponse {
+  const filePath = commandString({ args, key: 'path' })
+  const content = Reflect.get(args, 'content')
+  if (!filePath || typeof content !== 'string') return commandResponse({ payload: { error: 'Missing path or content' }, statusCode: 400 })
+
+  mkdirSync(path.dirname(filePath), { recursive: true })
+  writeUtf8File(filePath, content)
+  return commandResponse({ payload: null })
+}
+
+function commandVaultRename({ args }: VaultCommandContext): VaultCommandResponse {
+  const oldPath = commandString({ args, key: 'old_path' })
+  const newTitle = commandString({ args, key: 'new_title' })
+  if (!oldPath || !newTitle) return commandResponse({ payload: { error: 'Missing rename input' }, statusCode: 400 })
+
+  const vaultPath = commandString({ args, key: 'vault_path' })
+  const oldContent = readUtf8File(oldPath)
+  const oldTitle = oldContent.match(/^# (.+)$/m)?.[1]?.trim() ?? ''
+  const slug = newTitle.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/(^-|-$)/g, '')
+  const newPath = markdownSiblingPath(oldPath, slug)
+  if (!newPath) return commandResponse({ payload: { error: 'Invalid title' }, statusCode: 400 })
+
+  writeUtf8File(newPath, oldContent.replace(/^# .+$/m, `# ${newTitle}`))
+  if (newPath !== oldPath) unlinkSync(oldPath)
+
+  const updatedFiles = vaultPath ? updateTitleWikilinks({ excludePath: newPath, oldTitle, vaultPath }) : 0
+  return commandResponse({ payload: { new_path: newPath, updated_files: updatedFiles } })
+}
+
+function commandVaultRenameFilename({ args }: VaultCommandContext): VaultCommandResponse {
+  const oldPath = commandString({ args, key: 'old_path' })
+  if (!oldPath) return commandResponse({ payload: { error: 'Missing old path' }, statusCode: 400 })
+
+  const filename = validateMarkdownFilenameStem(commandString({ args, key: 'new_filename_stem' }))
+  if (!filename.ok) return commandResponse({ payload: { error: filename.error }, statusCode: 400 })
+
+  const newPath = markdownSiblingPath(oldPath, filename.stem)
+  if (!newPath) return commandResponse({ payload: { error: 'Invalid filename' }, statusCode: 400 })
+  if (newPath !== oldPath && pathExists(newPath)) {
+    return commandResponse({ payload: { error: 'A note with that name already exists' }, statusCode: 409 })
+  }
+
+  const vaultPath = commandString({ args, key: 'vault_path' })
+  const oldTitle = parseMarkdownFile(oldPath)?.title ?? path.basename(oldPath, '.md')
+  renameSync(oldPath, newPath)
+  const updatedFiles = vaultPath ? updatePathWikilinks({ newPath, oldPath, oldTitle, vaultPath }) : 0
+  return commandResponse({ payload: { new_path: newPath, updated_files: updatedFiles } })
+}
+
+function commandVaultDelete({ args }: VaultCommandContext): VaultCommandResponse {
+  const filePath = commandString({ args, key: 'path' })
+  if (!filePath) return commandResponse({ payload: { error: 'Missing path' }, statusCode: 400 })
+  unlinkSync(filePath)
+  return commandResponse({ payload: filePath })
+}
+
+const VAULT_COMMAND_HANDLERS = new Map<string, VaultCommandHandler>([
+  ['delete_note', commandVaultDelete],
+  ['get_all_content', commandVaultAllContent],
+  ['get_note_content', commandVaultContent],
+  ['list_vault', commandVaultList],
+  ['reload_vault', commandVaultList],
+  ['reload_vault_entry', commandVaultEntry],
+  ['rename_note', commandVaultRename],
+  ['rename_note_filename', commandVaultRenameFilename],
+  ['save_note_content', commandVaultSave],
+  ['search_vault', commandVaultSearch],
+  ['validate_note_content', commandVaultContent],
+])
+
+function runVaultCommand(context: VaultCommandContext): VaultCommandResponse {
+  const handler = VAULT_COMMAND_HANDLERS.get(context.cmd)
+  if (handler) return handler(context)
+  return commandResponse({ payload: { error: 'Unsupported vault command' }, statusCode: 404 })
+}
+
+function vaultCommandContext(payload: VaultCommandPayload): VaultCommandContext | null {
+  if (!payload.cmd || !payload.args) return null
+  return { cmd: payload.cmd, args: payload.args }
+}
+
+const VAULT_ENDPOINT_ARG_KEYS = ['path', 'vault_path', 'query', 'mode', 'reload'] as const
+
+function readVaultQueryArgs(url: URL): Record<string, unknown> {
+  const args: Record<string, unknown> = {}
+  for (const key of VAULT_ENDPOINT_ARG_KEYS) {
+    const value = url.searchParams.get(key)
+    if (value !== null) Reflect.set(args, key, value)
+  }
+  return args
+}
+
+async function readVaultEndpointArgs(url: URL, req: IncomingMessage): Promise<Record<string, unknown>> {
+  if (req.method === 'POST') return readJsonBody<Record<string, unknown>>(req)
+  return readVaultQueryArgs(url)
+}
+
+async function handleVaultReadCommand(
+  { cmd, pathname, req, res, url }: VaultReadCommandInput,
+): Promise<boolean> {
+  if (url.pathname !== pathname) return false
+  if (req.method !== 'GET' && req.method !== 'POST') {
+    sendJson(res, { error: 'Unsupported method' }, 405)
+    return true
+  }
+
+  try {
+    const response = runVaultCommand({ args: await readVaultEndpointArgs(url, req), cmd })
+    sendJson(res, response.payload, response.statusCode)
+  } catch (err: unknown) {
+    sendCaughtError(res, err, 'Vault read failed')
+  }
+  return true
+}
+
+function updateTitleWikilinks({ excludePath, oldTitle, vaultPath }: TitleWikilinkUpdateInput): number {
   const newPathStem = path.relative(vaultPath, excludePath).replace(/\.md$/i, '')
-  const oldTargets = collectLegacyWikilinkTargets(oldTitle, excludePath, vaultPath)
-  return updateWikilinksForTargets(vaultPath, oldTargets, newPathStem, excludePath)
+  const oldTargets = collectLegacyWikilinkTargets({ oldPath: excludePath, oldTitle, vaultPath })
+  return updateWikilinksForTargets({ excludePath, newTarget: newPathStem, oldTargets, vaultPath })
 }
 
-function collectLegacyWikilinkTargets(oldTitle: string, oldPath: string, vaultPath: string): string[] {
+function collectLegacyWikilinkTargets({ oldPath, oldTitle, vaultPath }: LegacyWikilinkTargetInput): string[] {
   const oldRelativeStem = path.relative(vaultPath, oldPath).replace(/\.md$/i, '')
   const oldFilenameStem = path.basename(oldPath, '.md')
   return [...new Set([oldTitle, oldRelativeStem, oldFilenameStem].filter(Boolean))]
 }
 
-function updateWikilinksForTargets(vaultPath: string, oldTargets: string[], newTarget: string, excludePath: string): number {
+function updateWikilinksForTargets({ excludePath, newTarget, oldTargets, vaultPath }: WikilinkTargetUpdateInput): number {
   if (oldTargets.length === 0) return 0
   const allFiles = findMarkdownFiles(vaultPath)
-  const escaped = oldTargets.map(target => target.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'))
-  const pattern = new RegExp(`\\[\\[(?:${escaped.join('|')})(\\|[^\\]]*?)?\\]\\]`, 'g')
+  const targets = new Set(oldTargets)
   let updatedFiles = 0
   for (const filePath of allFiles) {
     if (filePath === excludePath) continue
     try {
-      const content = fs.readFileSync(filePath, 'utf-8')
-      const replaced = content.replace(pattern, (_m: string, pipe: string | undefined) =>
-        pipe ? `[[${newTarget}${pipe}]]` : `[[${newTarget}]]`
-      )
+      const content = readUtf8File(filePath)
+      const replaced = content.replace(/\[\[([^\]|]+)(\|[^\]]*)?\]\]/g, (match: string, target: string, pipe: string | undefined) => {
+        if (!targets.has(target)) return match
+        return pipe ? `[[${newTarget}${pipe}]]` : `[[${newTarget}]]`
+      })
       if (replaced !== content) {
-        fs.writeFileSync(filePath, replaced, 'utf-8')
+        writeUtf8File(filePath, replaced)
         updatedFiles++
       }
     } catch {
@@ -257,10 +618,10 @@ function updateWikilinksForTargets(vaultPath: string, oldTargets: string[], newT
   return updatedFiles
 }
 
-function updatePathWikilinks(vaultPath: string, oldPath: string, newPath: string, oldTitle: string): number {
+function updatePathWikilinks({ newPath, oldPath, oldTitle, vaultPath }: PathWikilinkUpdateInput): number {
   const newRelativeStem = path.relative(vaultPath, newPath).replace(/\.md$/i, '')
-  const oldTargets = collectLegacyWikilinkTargets(oldTitle, oldPath, vaultPath)
-  return updateWikilinksForTargets(vaultPath, oldTargets, newRelativeStem, newPath)
+  const oldTargets = collectLegacyWikilinkTargets({ oldPath, oldTitle, vaultPath })
+  return updateWikilinksForTargets({ excludePath: newPath, newTarget: newRelativeStem, oldTargets, vaultPath })
 }
 
 function handleVaultPing(url: URL, res: ServerResponse): boolean {
@@ -269,108 +630,97 @@ function handleVaultPing(url: URL, res: ServerResponse): boolean {
   return true
 }
 
-function handleVaultList(url: URL, res: ServerResponse): boolean {
-  if (url.pathname !== '/api/vault/list') return false
-  const dirPath = readExistingQueryPath(url, res, 'path')
-  if (!dirPath) return true
-  const entries = findMarkdownFiles(dirPath).map(parseMarkdownFile).filter(Boolean)
-  sendJson(res, entries)
-  return true
+async function handleVaultList(url: URL, req: IncomingMessage, res: ServerResponse): Promise<boolean> {
+  return handleVaultReadCommand({ cmd: 'list_vault', pathname: '/api/vault/list', req, res, url })
 }
 
-function handleVaultContent(url: URL, res: ServerResponse): boolean {
-  if (url.pathname !== '/api/vault/content') return false
-  const filePath = readExistingQueryPath(url, res, 'path')
-  if (!filePath) return true
-  sendJson(res, { content: fs.readFileSync(filePath, 'utf-8') })
-  return true
+async function handleVaultContent(url: URL, req: IncomingMessage, res: ServerResponse): Promise<boolean> {
+  return handleVaultReadCommand({ cmd: 'get_note_content', pathname: '/api/vault/content', req, res, url })
 }
 
-function handleVaultAllContent(url: URL, res: ServerResponse): boolean {
-  if (url.pathname !== '/api/vault/all-content') return false
-  const dirPath = readExistingQueryPath(url, res, 'path')
-  if (!dirPath) return true
-  const contentMap: Record<string, string> = {}
-  for (const filePath of findMarkdownFiles(dirPath)) {
-    try {
-      contentMap[filePath] = fs.readFileSync(filePath, 'utf-8')
-    } catch {
-      // Skip unreadable files.
-    }
-  }
-  sendJson(res, contentMap)
-  return true
+async function handleVaultAllContent(url: URL, req: IncomingMessage, res: ServerResponse): Promise<boolean> {
+  return handleVaultReadCommand({ cmd: 'get_all_content', pathname: '/api/vault/all-content', req, res, url })
 }
 
-function handleVaultEntry(url: URL, res: ServerResponse): boolean {
-  if (url.pathname !== '/api/vault/entry') return false
-  const filePath = readExistingQueryPath(url, res, 'path')
-  if (!filePath) return true
-  sendJson(res, parseMarkdownFile(filePath))
-  return true
+async function handleVaultEntry(url: URL, req: IncomingMessage, res: ServerResponse): Promise<boolean> {
+  return handleVaultReadCommand({ cmd: 'reload_vault_entry', pathname: '/api/vault/entry', req, res, url })
 }
 
-function handleVaultSearch(url: URL, res: ServerResponse): boolean {
-  if (url.pathname !== '/api/vault/search') return false
-  const vaultPath = url.searchParams.get('vault_path')
-  const query = (url.searchParams.get('query') ?? '').toLowerCase()
-  const mode = url.searchParams.get('mode') ?? 'all'
-  if (!vaultPath || !query) {
-    sendJson(res, { results: [], elapsed_ms: 0, query, mode })
-    return true
-  }
+async function handleVaultSearch(url: URL, req: IncomingMessage, res: ServerResponse): Promise<boolean> {
+  return handleVaultReadCommand({ cmd: 'search_vault', pathname: '/api/vault/search', req, res, url })
+}
 
-  const results: { title: string; path: string; snippet: string; score: number; note_type: string | null }[] = []
+function collectVaultSearchResults({ vaultPath, query }: SearchRequestInput): VaultSearchResult[] {
+  const results: VaultSearchResult[] = []
   for (const filePath of findMarkdownFiles(vaultPath)) {
     const entry = parseMarkdownFile(filePath)
     if (!entry || entry.trashed) continue
-    const raw = fs.readFileSync(filePath, 'utf-8')
-    if (entry.title.toLowerCase().includes(query) || raw.toLowerCase().includes(query)) {
-      results.push({ title: entry.title, path: entry.path, snippet: entry.snippet, score: 1.0, note_type: entry.isA })
-    }
+    const rawContent = readUtf8File(filePath)
+    if (entryMatchesSearch({ entry, rawContent, query })) results.push(searchResultFromEntry(entry))
   }
-  sendJson(res, { results: results.slice(0, 20), elapsed_ms: 1, query, mode })
-  return true
+  return results.slice(0, 20)
+}
+
+function entryMatchesSearch({ entry, rawContent, query }: SearchEntryInput): boolean {
+  return entry.title.toLowerCase().includes(query) || rawContent.toLowerCase().includes(query)
+}
+
+function searchResultFromEntry(entry: VaultEntry): VaultSearchResult {
+  return { title: entry.title, path: entry.path, snippet: entry.snippet, score: 1.0, note_type: entry.isA }
 }
 
 async function handleVaultSave(url: URL, req: IncomingMessage, res: ServerResponse): Promise<boolean> {
-  if (url.pathname !== '/api/vault/save' || req.method !== 'POST') return false
+  if (!isPostRoute(url, req, '/api/vault/save')) return false
   try {
-    const body = await readRequestBody(req)
-    const { path: filePath, content } = JSON.parse(body)
-    if (!filePath || content === undefined) {
-      sendJson(res, { error: 'Missing path or content' }, 400)
-      return true
-    }
-    fs.mkdirSync(path.dirname(filePath), { recursive: true })
-    fs.writeFileSync(filePath, content, 'utf-8')
-    sendJson(res, null)
+    await saveVaultContent(req, res)
   } catch (err: unknown) {
-    sendJson(res, { error: err instanceof Error ? err.message : 'Save failed' }, 500)
+    sendCaughtError(res, err, 'Save failed')
   }
   return true
 }
 
+async function saveVaultContent(req: IncomingMessage, res: ServerResponse): Promise<void> {
+  const { path: filePath, content } = await readJsonBody<{ path?: string; content?: string }>(req)
+  if (!filePath || content === undefined) {
+    sendJson(res, { error: 'Missing path or content' }, 400)
+    return
+  }
+
+  mkdirSync(path.dirname(filePath), { recursive: true })
+  writeUtf8File(filePath, content)
+  sendJson(res, null)
+}
+
 async function handleVaultRename(url: URL, req: IncomingMessage, res: ServerResponse): Promise<boolean> {
-  if (url.pathname !== '/api/vault/rename' || req.method !== 'POST') return false
+  if (!isPostRoute(url, req, '/api/vault/rename')) return false
   try {
-    const body = await readRequestBody(req)
-    const { vault_path: vaultPath, old_path: oldPath, new_title: newTitle } = JSON.parse(body)
-    const oldContent = fs.readFileSync(oldPath, 'utf-8')
-    const oldTitle = oldContent.match(/^# (.+)$/m)?.[1]?.trim() ?? ''
-    const slug = newTitle.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/(^-|-$)/g, '')
-    const newPath = path.join(path.dirname(oldPath), `${slug}.md`)
-    const newContent = oldContent.replace(/^# .+$/m, `# ${newTitle}`)
-
-    fs.writeFileSync(newPath, newContent, 'utf-8')
-    if (newPath !== oldPath) fs.unlinkSync(oldPath)
-
-    const updatedFiles = vaultPath ? updateTitleWikilinks(vaultPath, oldTitle, newTitle, newPath) : 0
-    sendJson(res, { new_path: newPath, updated_files: updatedFiles })
+    await renameVaultNoteTitle(req, res)
   } catch (err: unknown) {
-    sendJson(res, { error: err instanceof Error ? err.message : 'Rename failed' }, 500)
+    sendCaughtError(res, err, 'Rename failed')
   }
   return true
+}
+
+async function renameVaultNoteTitle(req: IncomingMessage, res: ServerResponse): Promise<void> {
+  const {
+    vault_path: vaultPath,
+    old_path: oldPath,
+    new_title: newTitle,
+  } = await readJsonBody<{ vault_path?: string; old_path: string; new_title: string }>(req)
+  const oldContent = readUtf8File(oldPath)
+  const oldTitle = oldContent.match(/^# (.+)$/m)?.[1]?.trim() ?? ''
+  const slug = newTitle.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/(^-|-$)/g, '')
+  const newPath = markdownSiblingPath(oldPath, slug)
+  if (!newPath) {
+    sendJson(res, { error: 'Invalid title' }, 400)
+    return
+  }
+
+  writeUtf8File(newPath, oldContent.replace(/^# .+$/m, `# ${newTitle}`))
+  if (newPath !== oldPath) unlinkSync(oldPath)
+
+  const updatedFiles = vaultPath ? updateTitleWikilinks({ excludePath: newPath, oldTitle, vaultPath }) : 0
+  sendJson(res, { new_path: newPath, updated_files: updatedFiles })
 }
 
 type FilenameStemValidation =
@@ -388,35 +738,47 @@ function isUnsafeMarkdownFilenameStem(stem: string): boolean {
   return stem === '.' || stem === '..' || stem.includes('/') || stem.includes('\\')
 }
 
+function markdownSiblingPath(filePath: string, stem: string): string | null {
+  if (isUnsafeMarkdownFilenameStem(stem)) return null
+  return resolveInside(path.dirname(filePath), `${stem}.md`)
+}
+
 async function handleVaultRenameFilename(url: URL, req: IncomingMessage, res: ServerResponse): Promise<boolean> {
-  if (url.pathname !== '/api/vault/rename-filename' || req.method !== 'POST') return false
+  if (!isPostRoute(url, req, '/api/vault/rename-filename')) return false
   try {
-    const body = await readRequestBody(req)
-    const {
-      vault_path: vaultPath,
-      old_path: oldPath,
-      new_filename_stem: newFilenameStem,
-    } = JSON.parse(body)
-    const filename = validateMarkdownFilenameStem(newFilenameStem)
-    if (!filename.ok) {
-      sendJson(res, { error: filename.error }, 400)
-      return true
-    }
-
-    const newPath = path.join(path.dirname(oldPath), `${filename.stem}.md`)
-    const oldTitle = parseMarkdownFile(oldPath)?.title ?? path.basename(oldPath, '.md')
-    if (newPath !== oldPath && fs.existsSync(newPath)) {
-      sendJson(res, { error: 'A note with that name already exists' }, 409)
-      return true
-    }
-
-    fs.renameSync(oldPath, newPath)
-    const updatedFiles = vaultPath ? updatePathWikilinks(vaultPath, oldPath, newPath, oldTitle) : 0
-    sendJson(res, { new_path: newPath, updated_files: updatedFiles })
+    await renameVaultNoteFilename(req, res)
   } catch (err: unknown) {
-    sendJson(res, { error: err instanceof Error ? err.message : 'Rename failed' }, 500)
+    sendCaughtError(res, err, 'Rename failed')
   }
   return true
+}
+
+async function renameVaultNoteFilename(req: IncomingMessage, res: ServerResponse): Promise<void> {
+  const {
+    vault_path: vaultPath,
+    old_path: oldPath,
+    new_filename_stem: newFilenameStem,
+  } = await readJsonBody<{ vault_path?: string; old_path: string; new_filename_stem: string }>(req)
+  const filename = validateMarkdownFilenameStem(newFilenameStem)
+  if (!filename.ok) {
+    sendJson(res, { error: filename.error }, 400)
+    return
+  }
+
+  const newPath = markdownSiblingPath(oldPath, filename.stem)
+  if (!newPath) {
+    sendJson(res, { error: 'Invalid filename' }, 400)
+    return
+  }
+  if (newPath !== oldPath && pathExists(newPath)) {
+    sendJson(res, { error: 'A note with that name already exists' }, 409)
+    return
+  }
+
+  const oldTitle = parseMarkdownFile(oldPath)?.title ?? path.basename(oldPath, '.md')
+  renameSync(oldPath, newPath)
+  const updatedFiles = vaultPath ? updatePathWikilinks({ newPath, oldPath, oldTitle, vaultPath }) : 0
+  sendJson(res, { new_path: newPath, updated_files: updatedFiles })
 }
 
 async function handleVaultDelete(url: URL, req: IncomingMessage, res: ServerResponse): Promise<boolean> {
@@ -428,10 +790,27 @@ async function handleVaultDelete(url: URL, req: IncomingMessage, res: ServerResp
       sendJson(res, { error: 'Missing path' }, 400)
       return true
     }
-    fs.unlinkSync(filePath)
+    unlinkSync(filePath)
     sendJson(res, filePath)
   } catch (err: unknown) {
     sendJson(res, { error: err instanceof Error ? err.message : 'Delete failed' }, 500)
+  }
+  return true
+}
+
+async function handleVaultCommand(url: URL, req: IncomingMessage, res: ServerResponse): Promise<boolean> {
+  if (!isPostRoute(url, req, '/api/vault/command')) return false
+  try {
+    const context = vaultCommandContext(await readJsonBody<VaultCommandPayload>(req))
+    if (!context) {
+      sendJson(res, { error: 'Invalid vault command' }, 400)
+      return true
+    }
+
+    const response = runVaultCommand(context)
+    sendJson(res, response.payload, response.statusCode)
+  } catch (err: unknown) {
+    sendCaughtError(res, err, 'Vault command failed')
   }
   return true
 }
@@ -440,11 +819,12 @@ async function handleVaultApiRequest(req: IncomingMessage, res: ServerResponse):
   const url = new URL(req.url ?? '/', `http://${req.headers.host}`)
   const handlers = [
     () => Promise.resolve(handleVaultPing(url, res)),
-    () => Promise.resolve(handleVaultList(url, res)),
-    () => Promise.resolve(handleVaultContent(url, res)),
-    () => Promise.resolve(handleVaultAllContent(url, res)),
-    () => Promise.resolve(handleVaultEntry(url, res)),
-    () => Promise.resolve(handleVaultSearch(url, res)),
+    () => handleVaultCommand(url, req, res),
+    () => handleVaultList(url, req, res),
+    () => handleVaultContent(url, req, res),
+    () => handleVaultAllContent(url, req, res),
+    () => handleVaultEntry(url, req, res),
+    () => handleVaultSearch(url, req, res),
     () => handleVaultSave(url, req, res),
     () => handleVaultRename(url, req, res),
     () => handleVaultRenameFilename(url, req, res),
@@ -478,6 +858,18 @@ function readRequestBody(req: IncomingMessage): Promise<string> {
     req.on('data', (chunk: Buffer) => { body += chunk.toString() })
     req.on('end', () => resolve(body))
   })
+}
+
+async function readJsonBody<T>(req: IncomingMessage): Promise<T> {
+  return JSON.parse(await readRequestBody(req)) as T
+}
+
+function isPostRoute(url: URL, req: IncomingMessage, pathname: string): boolean {
+  return url.pathname === pathname && req.method === 'POST'
+}
+
+function sendCaughtError(res: ServerResponse, err: unknown, fallback: string): void {
+  sendJson(res, { error: err instanceof Error ? err.message : fallback }, 500)
 }
 
 /** WebSocket proxy info endpoint — tells the frontend where the MCP bridge is */
@@ -546,6 +938,11 @@ export default defineConfig({
     environment: 'jsdom',
     setupFiles: ['./src/test/setup.ts'],
     include: ['src/**/*.{test,spec}.{ts,tsx}'],
+    // The full jsdom suite is heavy enough that unconstrained worker fan-out can
+    // starve UI tests on local dev machines. Keep the default hook path stable,
+    // while still allowing CI or one-off runs to opt into a different cap.
+    maxWorkers: process.env.VITEST_MAX_WORKERS ?? 4,
+    testTimeout: 10_000,
     coverage: {
       provider: 'v8',
       reporter: ['text', 'json', 'html', 'lcov'],

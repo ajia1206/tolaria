@@ -118,6 +118,40 @@ describe('resolveEntry', () => {
     expect(resolveEntry([alpha, alphaArchived], 'projects/alpha')).toBe(alpha)
     expect(resolveEntry([alpha, alphaArchived], 'archive/alpha')).toBe(alphaArchived)
   })
+
+  it('resolves workspace-prefixed targets inside the matching mounted workspace', () => {
+    const personal = makeEntry({
+      path: '/personal/projects/alpha.md',
+      filename: 'alpha.md',
+      title: 'Alpha',
+      workspace: { id: 'personal', label: 'Personal', alias: 'personal', path: '/personal', shortLabel: 'PE', color: null, icon: null, mounted: true, available: true, defaultForNewNotes: true },
+    })
+    const team = makeEntry({
+      path: '/team/projects/alpha.md',
+      filename: 'alpha.md',
+      title: 'Alpha',
+      workspace: { id: 'team', label: 'Team', alias: 'team', path: '/team', shortLabel: 'TE', color: null, icon: null, mounted: true, available: true, defaultForNewNotes: false },
+    })
+
+    expect(resolveEntry([personal, team], 'team/projects/alpha', personal)).toBe(team)
+  })
+
+  it('prefers local workspace targets when links are unprefixed', () => {
+    const personal = makeEntry({
+      path: '/personal/alpha.md',
+      filename: 'alpha.md',
+      title: 'Alpha',
+      workspace: { id: 'personal', label: 'Personal', alias: 'personal', path: '/personal', shortLabel: 'PE', color: null, icon: null, mounted: true, available: true, defaultForNewNotes: true },
+    })
+    const team = makeEntry({
+      path: '/team/alpha.md',
+      filename: 'alpha.md',
+      title: 'Alpha',
+      workspace: { id: 'team', label: 'Team', alias: 'team', path: '/team', shortLabel: 'TE', color: null, icon: null, mounted: true, available: true, defaultForNewNotes: false },
+    })
+
+    expect(resolveEntry([team, personal], 'alpha', personal)).toBe(personal)
+  })
 })
 
 describe('relativePathStem', () => {
@@ -127,6 +161,24 @@ describe('relativePathStem', () => {
 
   it('preserves subdirectory structure', () => {
     expect(relativePathStem('/Users/luca/Vault/docs/adr/0031.md', '/Users/luca/Vault')).toBe('docs/adr/0031')
+  })
+
+  it('normalizes Windows extended-length paths before extracting the vault-relative stem', () => {
+    expect(
+      relativePathStem(
+        '\\\\?\\C:\\Users\\lrfno\\Documents\\tolaria-vault\\application-design-and-build.md',
+        'C:\\Users\\lrfno\\Documents\\tolaria-vault',
+      ),
+    ).toBe('application-design-and-build')
+  })
+
+  it('keeps nested Windows note paths vault-relative with slash separators', () => {
+    expect(
+      relativePathStem(
+        'C:\\Users\\lrfno\\Documents\\Tolaria Vault\\projects\\application-design-and-build.md',
+        'c:/users/lrfno/documents/tolaria vault',
+      ),
+    ).toBe('projects/application-design-and-build')
   })
 
   it('falls back to filename stem when vault path does not match', () => {
@@ -139,6 +191,10 @@ describe('slugifyWikilinkTarget', () => {
     expect(slugifyWikilinkTarget('Weekly Review')).toBe('weekly-review')
   })
 
+  it('preserves Unicode titles when no existing entry resolves them', () => {
+    expect(slugifyWikilinkTarget('你好')).toBe('你好')
+  })
+
   it('falls back to untitled when the title has no slug characters', () => {
     expect(slugifyWikilinkTarget('+++')).toBe('untitled')
   })
@@ -148,6 +204,23 @@ describe('canonicalWikilinkTargetForEntry', () => {
   it('returns a vault-relative path stem', () => {
     const entry = makeEntry({ path: '/vault/projects/alpha.md', filename: 'alpha.md', title: 'Alpha' })
     expect(canonicalWikilinkTargetForEntry(entry, '/vault')).toBe('projects/alpha')
+  })
+
+  it('prefixes cross-workspace targets with the stable alias', () => {
+    const source = makeEntry({
+      path: '/personal/source.md',
+      filename: 'source.md',
+      title: 'Source',
+      workspace: { id: 'personal', label: 'Personal', alias: 'personal', path: '/personal', shortLabel: 'PE', color: null, icon: null, mounted: true, available: true, defaultForNewNotes: true },
+    })
+    const target = makeEntry({
+      path: '/team/projects/alpha.md',
+      filename: 'alpha.md',
+      title: 'Alpha',
+      workspace: { id: 'team', label: 'Team', alias: 'team', path: '/team', shortLabel: 'TE', color: null, icon: null, mounted: true, available: true, defaultForNewNotes: false },
+    })
+
+    expect(canonicalWikilinkTargetForEntry(target, '/personal', source)).toBe('team/projects/alpha')
   })
 })
 
@@ -164,6 +237,10 @@ describe('canonicalWikilinkTargetForTitle', () => {
 
   it('falls back to a slug for a newly created note title', () => {
     expect(canonicalWikilinkTargetForTitle('Brand New Note', [], '/vault')).toBe('brand-new-note')
+  })
+
+  it('falls back to a Unicode-preserving slug for a newly created note title', () => {
+    expect(canonicalWikilinkTargetForTitle('你好', [], '/vault')).toBe('你好')
   })
 })
 

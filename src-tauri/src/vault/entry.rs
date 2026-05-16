@@ -54,6 +54,9 @@ pub struct VaultEntry {
     /// Default view mode for the note list when viewing instances of this Type.
     /// Stored as a string: "all", "editor-list", or "editor-only".
     pub view: Option<String>,
+    /// Rich-editor width mode for this note. None means use the app default.
+    #[serde(rename = "noteWidth")]
+    pub note_width: Option<String>,
     /// Whether this Type is visible in the sidebar. Defaults to true when absent.
     pub visible: Option<bool>,
     /// Whether this note has been explicitly organized (removed from Inbox).
@@ -70,8 +73,8 @@ pub struct VaultEntry {
     /// Extracted from `[[target]]` and `[[target|display]]` patterns.
     #[serde(rename = "outgoingLinks", default)]
     pub outgoing_links: Vec<String>,
-    /// Custom scalar frontmatter properties (non-relationship, non-structural).
-    /// Only includes strings, numbers, and booleans — arrays/objects are excluded.
+    /// Custom scalar and scalar-array frontmatter properties (non-relationship, non-structural).
+    /// Objects and arrays containing wikilinks are excluded.
     #[serde(default)]
     pub properties: HashMap<String, serde_json::Value>,
     /// Properties to display as chips in the note list for this Type's notes.

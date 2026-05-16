@@ -43,6 +43,16 @@ describe('resolveImageUrls', () => {
     )
   })
 
+  it('converts Windows relative attachment paths without mixed separators', () => {
+    tauriMode = true
+    const vaultPath = 'C:\\Users\\lnq12\\Documents\\tolaria-test\\Getting Started'
+    const markdown = '![BlockNote image](attachments/1776508281809-CleanShot.png)'
+
+    expect(resolveImageUrls(markdown, vaultPath)).toBe(
+      `![BlockNote image](${assetUrl('C:\\Users\\lnq12\\Documents\\tolaria-test\\Getting Started\\attachments\\1776508281809-CleanShot.png')})`,
+    )
+  })
+
   it('leaves already-correct asset URLs unchanged', () => {
     tauriMode = true
     const url = assetUrl('/vault/attachments/file.png')
@@ -58,6 +68,16 @@ describe('resolveImageUrls', () => {
 
     expect(resolveImageUrls(markdown, '/Users/john/Documents/Getting Started')).toBe(
       `![CleanShot](${assetUrl('/Users/john/Documents/Getting Started/attachments/CleanShot.png')})`,
+    )
+  })
+
+  it('rewrites Windows legacy asset URLs from a different vault', () => {
+    tauriMode = true
+    const legacyUrl = httpAssetUrl('C:\\Users\\old\\Workspace\\tolaria-getting-started\\attachments\\CleanShot.png')
+    const markdown = `![CleanShot](${legacyUrl})`
+
+    expect(resolveImageUrls(markdown, 'C:\\Users\\john\\Documents\\Getting Started')).toBe(
+      `![CleanShot](${assetUrl('C:\\Users\\john\\Documents\\Getting Started\\attachments\\CleanShot.png')})`,
     )
   })
 
@@ -97,6 +117,33 @@ describe('resolveImageUrls', () => {
     )
   })
 
+  it('resolves note-relative image paths against the active note directory', () => {
+    tauriMode = true
+    const markdown = '![shot](./img/Meeting Snapshot.png)'
+
+    expect(resolveImageUrls(markdown, '/vault', '/vault/projects/notes/plan.md')).toBe(
+      `![shot](${assetUrl('/vault/projects/notes/img/Meeting Snapshot.png')})`,
+    )
+  })
+
+  it('resolves parent traversal from the active note directory', () => {
+    tauriMode = true
+    const markdown = '![diagram](../shared/Architecture.png)'
+
+    expect(resolveImageUrls(markdown, '/vault', '/vault/projects/notes/plan.md')).toBe(
+      `![diagram](${assetUrl('/vault/projects/shared/Architecture.png')})`,
+    )
+  })
+
+  it('keeps remote and data image URLs unchanged when notePath is present', () => {
+    tauriMode = true
+    const httpImage = '![logo](https://example.com/logo.png)'
+    const dataImage = '![icon](data:image/png;base64,abc123)'
+
+    expect(resolveImageUrls(httpImage, '/vault', '/vault/projects/plan.md')).toBe(httpImage)
+    expect(resolveImageUrls(dataImage, '/vault', '/vault/projects/plan.md')).toBe(dataImage)
+  })
+
   it('skips unknown asset URLs without an attachments segment', () => {
     tauriMode = true
     const url = httpAssetUrl('/some/other/path/file.png')
@@ -125,6 +172,15 @@ describe('portableImageUrls', () => {
     )
   })
 
+  it('converts Windows extended-length asset URLs to relative paths', () => {
+    const url = httpAssetUrl('\\\\?\\C:\\Users\\lnq12\\Documents\\tolaria-test\\Getting Started\\attachments\\1777388840027-shot.png')
+    const markdown = `![screenshot](${url})`
+
+    expect(portableImageUrls(markdown, 'C:\\Users\\lnq12\\Documents\\tolaria-test\\Getting Started')).toBe(
+      '![screenshot](attachments/1777388840027-shot.png)',
+    )
+  })
+
   it('is a no-op when vaultPath is empty', () => {
     const url = assetUrl('/vault/attachments/file.png')
     const markdown = `![alt](${url})`
@@ -132,11 +188,11 @@ describe('portableImageUrls', () => {
     expect(portableImageUrls(markdown, '')).toBe(markdown)
   })
 
-  it('leaves asset URLs from other vaults unchanged', () => {
+  it('unwraps asset URLs from other vaults to absolute filesystem paths', () => {
     const url = assetUrl('/other-vault/attachments/file.png')
     const markdown = `![alt](${url})`
 
-    expect(portableImageUrls(markdown, '/vault')).toBe(markdown)
+    expect(portableImageUrls(markdown, '/vault')).toBe('![alt](/other-vault/attachments/file.png)')
   })
 
   it('leaves relative and external paths unchanged', () => {
@@ -161,6 +217,28 @@ describe('portableImageUrls', () => {
 
     expect(portableImageUrls(markdown, '/vault')).toBe('![shot](attachments/a.png "starter vault")')
   })
+
+  it('serializes vault-local asset URLs relative to the active note directory', () => {
+    const markdown = `![shot](${assetUrl('/vault/projects/notes/img/Meeting Snapshot.png')})`
+
+    expect(portableImageUrls(markdown, '/vault', '/vault/projects/notes/plan.md')).toBe(
+      '![shot](./img/Meeting Snapshot.png)',
+    )
+  })
+
+  it('serializes vault-local asset URLs with parent traversal when needed', () => {
+    const markdown = `![diagram](${assetUrl('/vault/projects/shared/Architecture.png')})`
+
+    expect(portableImageUrls(markdown, '/vault', '/vault/projects/notes/plan.md')).toBe(
+      '![diagram](../shared/Architecture.png)',
+    )
+  })
+
+  it('unwraps external asset URLs to filesystem paths instead of saving asset scheme URLs', () => {
+    const markdown = `![external](${assetUrl('/Users/luca/Pictures/photo.png')})`
+
+    expect(portableImageUrls(markdown, '/vault')).toBe('![external](/Users/luca/Pictures/photo.png)')
+  })
 })
 
 describe('resolveImageUrls / portableImageUrls round-trip', () => {
@@ -169,5 +247,15 @@ describe('resolveImageUrls / portableImageUrls round-trip', () => {
     const markdown = '![shot](attachments/file.png)'
 
     expect(portableImageUrls(resolveImageUrls(markdown, '/vault'), '/vault')).toBe(markdown)
+  })
+
+  it('keeps note-relative markdown stable', () => {
+    tauriMode = true
+    const markdown = '![shot](./img/Meeting Snapshot.png)'
+    const notePath = '/vault/projects/notes/plan.md'
+
+    expect(
+      portableImageUrls(resolveImageUrls(markdown, '/vault', notePath), '/vault', notePath),
+    ).toBe(markdown)
   })
 })

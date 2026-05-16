@@ -6,6 +6,7 @@ import type { VaultEntry } from '../types'
 import { RAPID_CREATE_NOTE_SETTLE_MS } from './useNoteCreation'
 import { useNoteActions } from './useNoteActions'
 import type { NoteActionsConfig } from './useNoteActions'
+import { GITIGNORED_VISIBILITY_APPLIED_EVENT } from '../lib/gitignoredVisibilityEvents'
 
 vi.mock('@tauri-apps/api/core', () => ({ invoke: vi.fn() }))
 vi.mock('../mock-tauri', () => ({
@@ -54,6 +55,22 @@ const makeEntry = (overrides: Partial<VaultEntry> = {}): VaultEntry => ({
   ...overrides,
 })
 
+const makeWorkspace = (
+  path: string,
+  alias: string,
+): NonNullable<VaultEntry['workspace']> => ({
+  id: alias,
+  label: alias,
+  alias,
+  path,
+  shortLabel: alias.slice(0, 2).toUpperCase(),
+  color: null,
+  icon: null,
+  mounted: true,
+  available: true,
+  defaultForNewNotes: false,
+})
+
 describe('useNoteActions hook', () => {
   const addEntry = vi.fn()
   const removeEntry = vi.fn()
@@ -66,6 +83,7 @@ describe('useNoteActions hook', () => {
 
   beforeEach(() => {
     vi.clearAllMocks()
+    vi.mocked(invoke).mockReset()
     vi.mocked(isTauri).mockReturnValue(false)
     vi.useRealTimers()
   })
@@ -74,11 +92,17 @@ describe('useNoteActions hook', () => {
     return renderHook(() => useNoteActions(makeConfig(entries)))
   }
 
-  function createImmediateEntry(type?: string) {
+  async function flushAsyncWork() {
+    await Promise.resolve()
+    await Promise.resolve()
+  }
+
+  async function createImmediateEntry(type?: string) {
     vi.spyOn(Date, 'now').mockReturnValue(1700000000000)
     const { result } = renderActions()
-    act(() => {
+    await act(async () => {
       result.current.handleCreateNoteImmediate(type)
+      await flushAsyncWork()
     })
     const [createdEntry] = addEntry.mock.calls[0]
     vi.restoreAllMocks()
@@ -100,11 +124,11 @@ describe('useNoteActions hook', () => {
       expectedType: 'Type',
       expectedPathFragment: 'recipe.md',
     },
-  ])('$name creates the expected entry', ({ run, expectedTitle, expectedType, expectedPathFragment }) => {
+  ])('$name creates the expected entry', async ({ run, expectedTitle, expectedType, expectedPathFragment }) => {
     const { result } = renderActions()
 
-    act(() => {
-      run(result)
+    await act(async () => {
+      await run(result)
     })
 
     expect(addEntry).toHaveBeenCalledTimes(1)
@@ -157,6 +181,31 @@ describe('useNoteActions hook', () => {
     warnSpy.mockRestore()
   })
 
+  it('keeps the active tab open when gitignored visibility reports a /tmp alias', async () => {
+    const activeEntry = makeEntry({
+      path: '/private/tmp/tolaria-vault/active.md',
+      filename: 'active.md',
+      title: 'Active',
+    })
+    const { result } = renderActions([activeEntry])
+
+    await act(async () => {
+      await result.current.handleSelectNote(activeEntry)
+    })
+
+    act(() => {
+      window.dispatchEvent(new CustomEvent(GITIGNORED_VISIBILITY_APPLIED_EVENT, {
+        detail: {
+          hide: true,
+          visiblePaths: ['/tmp/tolaria-vault/active.md'],
+        },
+      }))
+    })
+
+    expect(result.current.activeTabPath).toBe('/private/tmp/tolaria-vault/active.md')
+    expect(result.current.tabs).toHaveLength(1)
+  })
+
   it('handleUpdateFrontmatter calls updateEntry with mapped patch', async () => {
     const { result } = renderHook(() => useNoteActions(makeConfig()))
 
@@ -166,6 +215,30 @@ describe('useNoteActions hook', () => {
 
     expect(updateEntry).toHaveBeenCalledWith('/vault/note.md', { status: 'Done' })
     expect(setToastMessage).toHaveBeenCalledWith('Property updated')
+  })
+
+  it('marks Tauri frontmatter writes as internal before invoking the command', async () => {
+    vi.mocked(isTauri).mockReturnValue(true)
+    const order: string[] = []
+    const onInternalVaultWrite = vi.fn((path: string) => {
+      order.push(`mark:${path}`)
+    })
+    vi.mocked(invoke).mockImplementation(async (command) => {
+      order.push(`invoke:${String(command)}`)
+      return '---\nstatus: Done\n---\nBody'
+    })
+
+    const { result } = renderHook(() => useNoteActions({
+      ...makeConfig(),
+      onInternalVaultWrite,
+    }))
+
+    await act(async () => {
+      await result.current.handleUpdateFrontmatter('/vault/note.md', 'status', 'Done')
+    })
+
+    expect(onInternalVaultWrite).toHaveBeenCalledWith('/vault/note.md')
+    expect(order).toEqual(['mark:/vault/note.md', 'invoke:update_frontmatter'])
   })
 
   it('handleUpdateFrontmatter syncs is_a and color changes to entries', async () => {
@@ -194,25 +267,49 @@ describe('useNoteActions hook', () => {
     expect(setToastMessage).toHaveBeenCalledWith('Property deleted')
   })
 
-  it('handleCreateNoteImmediate creates note with timestamp-based title', () => {
-    const createdEntry = createImmediateEntry()
+  it('ignores guarded inspector property deletes after the active note changes', async () => {
+    const noteA = makeEntry({ path: '/vault/note-a.md', filename: 'note-a.md', title: 'Note A' })
+    const noteB = makeEntry({ path: '/vault/note-b.md', filename: 'note-b.md', title: 'Note B' })
+    const { result } = renderHook(() => useNoteActions(makeConfig([noteA, noteB])))
+
+    act(() => {
+      result.current.handleSwitchTab(noteB.path)
+    })
+    await act(async () => {
+      await result.current.handleDeleteProperty(noteA.path, 'status', { requireActivePath: noteA.path })
+    })
+
+    expect(updateEntry).not.toHaveBeenCalled()
+    expect(setToastMessage).not.toHaveBeenCalled()
+  })
+
+  it('handleCreateNoteImmediate creates note with timestamp-based title', async () => {
+    const createdEntry = await createImmediateEntry()
     expect(createdEntry.title).toBe('Untitled Note 1700000000')
     expect(createdEntry.filename).toBe('untitled-note-1700000000.md')
     expect(createdEntry.isA).toBe('Note')
   })
 
-  it('handleCreateNoteImmediate generates unique names on rapid calls via timestamp', () => {
+  it('handleCreateNoteImmediate generates unique names on rapid calls via timestamp', async () => {
     vi.useFakeTimers()
     let ts = 1700000000000
     vi.spyOn(Date, 'now').mockImplementation(() => { ts += 1000; return ts })
     const { result } = renderHook(() => useNoteActions(makeConfig()))
 
-    act(() => {
+    await act(async () => {
       result.current.handleCreateNoteImmediate()
       result.current.handleCreateNoteImmediate()
       result.current.handleCreateNoteImmediate()
+      await flushAsyncWork()
     })
-    act(() => { vi.advanceTimersByTime(RAPID_CREATE_NOTE_SETTLE_MS * 2) })
+    await act(async () => {
+      vi.advanceTimersByTime(RAPID_CREATE_NOTE_SETTLE_MS)
+      await flushAsyncWork()
+    })
+    await act(async () => {
+      vi.advanceTimersByTime(RAPID_CREATE_NOTE_SETTLE_MS)
+      await flushAsyncWork()
+    })
 
     expect(addEntry).toHaveBeenCalledTimes(3)
     const filenames = addEntry.mock.calls.map(([e]: [VaultEntry]) => e.filename)
@@ -224,8 +321,8 @@ describe('useNoteActions hook', () => {
     vi.restoreAllMocks()
   })
 
-  it('handleCreateNoteImmediate accepts custom type', () => {
-    const createdEntry = createImmediateEntry('Project')
+  it('handleCreateNoteImmediate accepts custom type', async () => {
+    const createdEntry = await createImmediateEntry('Project')
     expect(createdEntry.filename).toMatch(/^untitled-project-\d+\.md$/)
     expect(createdEntry.isA).toBe('Project')
   })
@@ -255,40 +352,29 @@ describe('useNoteActions hook', () => {
     expect(tabContent).toContain('## Steps')
   })
 
-  it('handleCreateNoteImmediate does not throw for custom types with special characters', () => {
+  it.each([
+    ['Q&A', (entry: VaultEntry) => { expect(entry.isA).toBe('Q&A') }],
+    ['+++', (entry: VaultEntry) => { expect(entry.filename).not.toBe('.md') }],
+  ])('handleCreateNoteImmediate handles custom type "%s"', async (typeName, assertEntry) => {
     const { result } = renderHook(() => useNoteActions(makeConfig()))
 
-    expect(() => {
-      act(() => {
-        result.current.handleCreateNoteImmediate('Q&A')
-      })
-    }).not.toThrow()
-
-    const [entry] = addEntry.mock.calls[0]
-    expect(entry.isA).toBe('Q&A')
-    expect(entry.path).not.toContain('//')
-  })
-
-  it('handleCreateNoteImmediate does not throw for types that slugify to empty string', () => {
-    const { result } = renderHook(() => useNoteActions(makeConfig()))
-
-    expect(() => {
-      act(() => {
-        result.current.handleCreateNoteImmediate('+++')
-      })
-    }).not.toThrow()
+    await act(async () => {
+      expect(() => { result.current.handleCreateNoteImmediate(typeName) }).not.toThrow()
+      await flushAsyncWork()
+    })
 
     const [entry] = addEntry.mock.calls[0]
     expect(entry.path).not.toContain('//')
-    expect(entry.filename).not.toBe('.md')
+    assertEntry(entry)
   })
 
-  it('handleCreateNoteImmediate uses template for typed notes', () => {
+  it('handleCreateNoteImmediate uses template for typed notes', async () => {
     const typeEntry = makeEntry({ isA: 'Type', title: 'Project', template: '## Custom Template\n\n' })
     const { result } = renderHook(() => useNoteActions(makeConfig([typeEntry])))
 
-    act(() => {
+    await act(async () => {
       result.current.handleCreateNoteImmediate('Project')
+      await flushAsyncWork()
     })
 
     const tabContent = result.current.tabs[0].content
@@ -307,7 +393,15 @@ describe('useNoteActions hook', () => {
   })
 
   describe('pending save lifecycle', () => {
-    it('createAndPersist calls addPendingSave on start (non-Tauri)', async () => {
+    it.each([
+      ['start', 'Pending Test', 'pending-test.md', 'addPendingSave'],
+      ['completion', 'Persist OK', 'persist-ok.md', 'removePendingSave'],
+    ])('createAndPersist calls pending-save callback on %s (non-Tauri)', async (
+      _phase,
+      title,
+      pathFragment,
+      callbackName,
+    ) => {
       const addPendingSave = vi.fn()
       const removePendingSave = vi.fn()
       const config = makeConfig()
@@ -317,28 +411,12 @@ describe('useNoteActions hook', () => {
       const { result } = renderHook(() => useNoteActions(config))
 
       await act(async () => {
-        result.current.handleCreateNote('Pending Test', 'Note')
-        await new Promise((r) => setTimeout(r, 0))
+        result.current.handleCreateNote(title, 'Note')
+        await flushAsyncWork()
       })
 
-      expect(addPendingSave).toHaveBeenCalledWith(expect.stringContaining('pending-test.md'))
-    })
-
-    it('createAndPersist calls removePendingSave when persist completes (non-Tauri)', async () => {
-      const addPendingSave = vi.fn()
-      const removePendingSave = vi.fn()
-      const config = makeConfig()
-      config.addPendingSave = addPendingSave
-      config.removePendingSave = removePendingSave
-
-      const { result } = renderHook(() => useNoteActions(config))
-
-      await act(async () => {
-        result.current.handleCreateNote('Persist OK', 'Note')
-        await new Promise((r) => setTimeout(r, 0))
-      })
-
-      expect(removePendingSave).toHaveBeenCalledWith(expect.stringContaining('persist-ok.md'))
+      const callback = callbackName === 'addPendingSave' ? addPendingSave : removePendingSave
+      expect(callback).toHaveBeenCalledWith(expect.stringContaining(pathFragment))
     })
 
     it('createAndPersist calls removePendingSave AND reverts when persist fails (Tauri)', async () => {
@@ -363,22 +441,36 @@ describe('useNoteActions hook', () => {
       expect(setToastMessage).toHaveBeenCalledWith('Failed to create note — disk write error')
     })
 
-    it('handleCreateNoteImmediate calls trackUnsaved and markContentPending (no disk write)', async () => {
-      const trackUnsaved = vi.fn()
-      const markContentPending = vi.fn()
+    it('handleCreateNoteImmediate creates the backing file before opening the note', async () => {
+      vi.mocked(isTauri).mockReturnValue(true)
+      vi.mocked(invoke).mockResolvedValueOnce(undefined)
+      const addPendingSave = vi.fn()
+      const removePendingSave = vi.fn()
+      const onNewNotePersisted = vi.fn()
       const config = makeConfig()
-      config.trackUnsaved = trackUnsaved
-      config.markContentPending = markContentPending
+      config.addPendingSave = addPendingSave
+      config.removePendingSave = removePendingSave
+      config.onNewNotePersisted = onNewNotePersisted
 
       const { result } = renderHook(() => useNoteActions(config))
 
       await act(async () => {
         result.current.handleCreateNoteImmediate()
-        await new Promise((r) => setTimeout(r, 0))
+        await flushAsyncWork()
       })
 
-      expect(trackUnsaved).toHaveBeenCalledWith(expect.stringMatching(/untitled-note-\d+\.md$/))
-      expect(markContentPending).toHaveBeenCalledWith(expect.stringMatching(/untitled-note-\d+\.md$/), expect.stringContaining('type: Note'))
+      const createdPath = expect.stringMatching(/untitled-note-\d+\.md$/)
+      expect(vi.mocked(invoke)).toHaveBeenCalledWith('create_note_content', {
+        path: createdPath,
+        content: expect.stringContaining('type: Note'),
+        vaultPath: '/test/vault',
+      })
+      expect(addPendingSave).toHaveBeenCalledWith(createdPath)
+      expect(removePendingSave).toHaveBeenCalledWith(createdPath)
+      expect(onNewNotePersisted).toHaveBeenCalledOnce()
+      expect(onNewNotePersisted).toHaveBeenCalledWith(createdPath)
+      expect(addEntry).toHaveBeenCalledTimes(1)
+      expect(result.current.tabs[0].entry.path).toMatch(/untitled-note-\d+\.md$/)
     })
 
     it('calls onNewNotePersisted after successful disk write (non-Tauri)', async () => {
@@ -394,6 +486,7 @@ describe('useNoteActions hook', () => {
       })
 
       expect(onNewNotePersisted).toHaveBeenCalledTimes(1)
+      expect(onNewNotePersisted).toHaveBeenCalledWith(expect.stringContaining('persist-callback.md'))
     })
 
     it('does not call onNewNotePersisted when disk write fails (Tauri)', async () => {
@@ -454,20 +547,28 @@ describe('useNoteActions hook', () => {
       expect(setToastMessage).not.toHaveBeenCalled()
     })
 
-    it('handleCreateNoteImmediate does not call invoke (no disk write)', async () => {
+    it('handleCreateNoteImmediate writes each rapid note before opening it', async () => {
       vi.useFakeTimers()
+      vi.mocked(invoke).mockResolvedValue(undefined)
       const { result } = renderHook(() => useNoteActions(makeConfig()))
 
-      act(() => {
+      await act(async () => {
         result.current.handleCreateNoteImmediate()
         result.current.handleCreateNoteImmediate()
         result.current.handleCreateNoteImmediate()
+        await flushAsyncWork()
       })
-      act(() => { vi.advanceTimersByTime(RAPID_CREATE_NOTE_SETTLE_MS * 2) })
+      await act(async () => {
+        vi.advanceTimersByTime(RAPID_CREATE_NOTE_SETTLE_MS)
+        await flushAsyncWork()
+      })
+      await act(async () => {
+        vi.advanceTimersByTime(RAPID_CREATE_NOTE_SETTLE_MS)
+        await flushAsyncWork()
+      })
 
       expect(addEntry).toHaveBeenCalledTimes(3)
-      // No disk writes for immediate creation — notes are unsaved/in-memory
-      expect(invoke).not.toHaveBeenCalled()
+      expect(vi.mocked(invoke).mock.calls.filter(([command]) => command === 'create_note_content')).toHaveLength(3)
       expect(removeEntry).not.toHaveBeenCalled()
     })
 
@@ -490,10 +591,14 @@ describe('useNoteActions hook', () => {
   })
 
   describe('note open is read-only', () => {
-    it('does not sync title or reload entry when opening or reopening a note', async () => {
+    it('does not sync title or reload entry when reopening an identity-matched cached note', async () => {
       vi.mocked(isTauri).mockReturnValue(true)
       const entry = makeEntry({ path: '/test/vault/qa-test.md', filename: 'qa-test.md', title: 'Qa Test' })
-      vi.mocked(invoke).mockResolvedValueOnce('# Qa Test\n')
+      vi.mocked(invoke).mockImplementation(async (command) => {
+        if (command === 'validate_note_content') return true
+        if (command === 'get_note_content') return '# Qa Test\n'
+        return null
+      })
 
       const { result } = renderHook(() => useNoteActions(makeConfig([entry])))
 
@@ -568,6 +673,103 @@ describe('useNoteActions hook', () => {
       expect(mockInvoke).toHaveBeenCalledWith('rename_note', expect.objectContaining({
         old_title: null,
       }))
+    })
+
+    it('exposes the workspace move handler from composed note actions', async () => {
+      const sourceWorkspace = makeWorkspace('/test/vault', 'personal')
+      const destinationWorkspace = makeWorkspace('/team/vault', 'team')
+      const entry = makeEntry({
+        path: '/test/vault/project.md',
+        filename: 'project.md',
+        title: 'Project',
+        workspace: sourceWorkspace,
+      })
+      const replaceEntry = vi.fn()
+      const config = makeConfig([entry])
+
+      vi.mocked(mockInvoke).mockImplementation(async (cmd: string) => {
+        if (cmd === 'move_note_to_workspace') {
+          return { new_path: '/team/vault/project.md', updated_files: 0, failed_updates: 0 }
+        }
+        if (cmd === 'get_note_content') return '# Project\n'
+        return ''
+      })
+
+      const { result } = renderHook(() => useNoteActions(config))
+
+      await act(async () => {
+        await result.current.handleMoveNoteToWorkspace(
+          '/test/vault/project.md',
+          destinationWorkspace,
+          '/test/vault',
+          replaceEntry,
+        )
+      })
+
+      expect(mockInvoke).toHaveBeenCalledWith('move_note_to_workspace', expect.objectContaining({
+        source_vault_path: '/test/vault',
+        destination_vault_path: '/team/vault',
+        old_path: '/test/vault/project.md',
+      }))
+      expect(replaceEntry).toHaveBeenCalledWith(
+        '/test/vault/project.md',
+        expect.objectContaining({ path: '/team/vault/project.md', workspace: destinationWorkspace }),
+        '# Project\n',
+      )
+    })
+
+    it('routes stale frontmatter saves to a note moved between workspaces', async () => {
+      const sourcePath = '/test/vault/project.md'
+      const destinationPath = '/team/vault/project.md'
+      const sourceWorkspace = makeWorkspace('/test/vault', 'personal')
+      const destinationWorkspace = makeWorkspace('/team/vault', 'team')
+      const entry = makeEntry({
+        path: sourcePath,
+        filename: 'project.md',
+        title: 'Project',
+        workspace: sourceWorkspace,
+      })
+      const replaceEntry = vi.fn()
+      const onPathRenamed = vi.fn()
+      const config = makeConfig([entry])
+      config.onPathRenamed = onPathRenamed
+
+      vi.mocked(mockInvoke).mockImplementation(async (cmd: string) => {
+        if (cmd === 'move_note_to_workspace') {
+          return { new_path: destinationPath, updated_files: 0, failed_updates: 0 }
+        }
+        if (cmd === 'get_note_content') return '# Project\n'
+        if (cmd === 'save_note_content') return undefined
+        return ''
+      })
+
+      const { result } = renderHook(() => useNoteActions(config))
+
+      await act(async () => {
+        await result.current.handleMoveNoteToWorkspace(
+          sourcePath,
+          destinationWorkspace,
+          sourceWorkspace.path,
+          replaceEntry,
+        )
+        await result.current.handleUpdateFrontmatter(sourcePath, 'status', 'Done')
+      })
+
+      const savePaths = vi.mocked(mockInvoke).mock.calls
+        .filter(([cmd]) => cmd === 'save_note_content')
+        .map(([, args]) => args)
+        .filter((args): args is { path: string } => (
+          typeof args === 'object'
+          && args !== null
+          && 'path' in args
+          && typeof args.path === 'string'
+        ))
+        .map((args) => args.path)
+
+      expect(onPathRenamed).toHaveBeenCalledWith(sourcePath, destinationPath)
+      expect(savePaths).toContain(destinationPath)
+      expect(savePaths).not.toContain(sourcePath)
+      expect(updateEntry).toHaveBeenCalledWith(destinationPath, expect.objectContaining({ status: 'Done' }))
     })
 
     it('handleUpdateFrontmatter triggers rename when title key is changed', async () => {

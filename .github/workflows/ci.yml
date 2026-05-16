@@ -14,10 +14,12 @@ permissions:
 env:
   # Bump this when Tauri/Rust target artifacts capture stale absolute paths.
   RUST_TARGET_CACHE_VERSION: v2026-04-14-tolaria
+  # Keep large production frontend builds below CI runner memory limits.
+  NODE_OPTIONS: --max-old-space-size=4096
 
 jobs:
-  test:
-    name: Tests & Quality Checks
+  frontend-quality:
+    name: Frontend Tests & Quality Checks
     runs-on: macos-15
 
     steps:
@@ -26,7 +28,7 @@ jobs:
           fetch-depth: 0  # Full history for CodeScene
 
       - name: Setup pnpm
-        uses: pnpm/action-setup@v4
+        uses: pnpm/action-setup@f40ffcd9367d9f12939873eb1018b921a783ffaa
         with:
           version: 10
 
@@ -36,69 +38,42 @@ jobs:
           node-version: '22'
           cache: 'pnpm'
 
-      - name: Setup Rust
-        uses: dtolnay/rust-toolchain@stable
-        with:
-          components: rustfmt, clippy, llvm-tools-preview
-
-      - name: Cache Rust dependencies
-        uses: actions/cache@v4
-        with:
-          path: |
-            ~/.cargo/registry
-            ~/.cargo/git
-            src-tauri/target
-          key: ${{ runner.os }}-cargo-${{ env.RUST_TARGET_CACHE_VERSION }}-${{ hashFiles('src-tauri/Cargo.lock') }}
-          restore-keys: |
-            ${{ runner.os }}-cargo-${{ env.RUST_TARGET_CACHE_VERSION }}-
-
-      - name: Install cargo-llvm-cov
-        uses: taiki-e/install-action@cargo-llvm-cov
-
       - name: Install dependencies
         run: pnpm install --frozen-lockfile
 
+      # Keep frontend and Rust quality gates in separate macOS jobs so the
+      # expensive Rust target cache restore no longer blocks the frontend lane.
       # ── 0. Build check (catches type errors and bundler failures) ─────────
       - name: TypeScript type check
         run: pnpm exec tsc --noEmit
 
       - name: Vite build check
-        run: pnpm build
+        # TypeScript is checked explicitly above; run Vite directly here to avoid
+        # paying for the package build script's duplicate `tsc -b` pass.
+        run: pnpm exec vite build
 
-      # ── 1. Tests ──────────────────────────────────────────────────────────
-      - name: Run frontend tests
-        run: pnpm test
+      - name: Docs build check
+        run: pnpm docs:build
 
+      # ── 1. Coverage-backed tests ──────────────────────────────────────────
+      # The coverage command runs the canonical frontend test suite.
       - name: Bundle MCP server resources (required by Tauri build)
         run: node scripts/bundle-mcp-server.mjs
 
-      - name: Run Rust tests
-        run: cargo test --manifest-path=src-tauri/Cargo.toml
-
-      # ── 2. Coverage (enforced — fails build if thresholds not met) ────────
-      - name: Frontend coverage (≥70% lines/functions/branches/statements)
+      # ── 2. Tests + coverage (enforced — fails build if thresholds not met) ─
+      - name: Frontend tests + coverage (≥70% lines/functions/branches/statements)
         run: pnpm test:coverage
         # Thresholds configured in vite.config.ts — exits non-zero if coverage drops
 
-      - name: Rust coverage (≥85% lines)
-        run: |
-          cargo llvm-cov \
-            --manifest-path src-tauri/Cargo.toml \
-            --ignore-filename-regex 'lib\.rs|main\.rs|menu\.rs' \
-            --lcov \
-            --output-path coverage/rust.lcov \
-            --fail-under-lines 85
-        # cargo-llvm-cov exits non-zero if line coverage drops below 85%
-        # lib.rs/main.rs/menu.rs are Tauri boilerplate -- not meaningfully unit-testable.
-
-      - name: Upload coverage to Codecov
+      - name: Upload frontend coverage to Codecov
         if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository
-        uses: codecov/codecov-action@v5
+        uses: codecov/codecov-action@75cd11691c0faa626561e295848008c8a7dddffe
         with:
           use_oidc: true
           fail_ci_if_error: true
           disable_search: true
-          files: ./coverage/lcov.info,./coverage/rust.lcov
+          files: ./coverage/lcov.info
+          flags: frontend
           verbose: true
         # OIDC avoids long-lived CODECOV_TOKEN secrets.
 
@@ -162,6 +137,56 @@ jobs:
       - name: Lint frontend
         run: pnpm lint
 
+  rust-quality:
+    name: Rust Tests & Quality Checks
+    runs-on: macos-15
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup Rust
+        uses: dtolnay/rust-toolchain@29eef336d9b2848a0b548edc03f92a220660cdb8
+        with:
+          components: rustfmt, clippy, llvm-tools-preview
+
+      - name: Cache Rust dependencies
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            src-tauri/target
+          key: ${{ runner.os }}-cargo-${{ env.RUST_TARGET_CACHE_VERSION }}-${{ hashFiles('src-tauri/Cargo.lock') }}
+          restore-keys: |
+            ${{ runner.os }}-cargo-${{ env.RUST_TARGET_CACHE_VERSION }}-
+
+      - name: Install cargo-llvm-cov
+        uses: taiki-e/install-action@e5de28abeb52d916c5e5875d54b21a9e738b61ec
+
+      - name: Rust tests + coverage (≥85% lines)
+        run: |
+          mkdir -p coverage
+          cargo llvm-cov \
+            --manifest-path src-tauri/Cargo.toml \
+            --ignore-filename-regex 'lib\.rs|main\.rs|menu\.rs' \
+            --lcov \
+            --output-path coverage/rust.lcov \
+            --fail-under-lines 85
+        # cargo-llvm-cov exits non-zero if line coverage drops below 85%
+        # lib.rs/main.rs/menu.rs are Tauri boilerplate -- not meaningfully unit-testable.
+
+      - name: Upload Rust coverage to Codecov
+        if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository
+        uses: codecov/codecov-action@75cd11691c0faa626561e295848008c8a7dddffe
+        with:
+          use_oidc: true
+          fail_ci_if_error: true
+          disable_search: true
+          files: ./coverage/rust.lcov
+          flags: rust
+          verbose: true
+        # OIDC avoids long-lived CODECOV_TOKEN secrets.
+
       - name: Clippy (Rust)
         run: cargo clippy --manifest-path=src-tauri/Cargo.toml -- -D warnings
 
@@ -170,6 +195,11 @@ jobs:
 
   linux-build:
     name: Linux build verification
+    # Keep the normal push CI lane under the 10-minute target. The release
+    # workflows already perform the full Linux/AppImage build after main
+    # pushes, so this slower compatibility check stays available for PRs and
+    # manual diagnostics without blocking every direct push.
+    if: github.event_name == 'pull_request' || github.event_name == 'workflow_dispatch'
     runs-on: ubuntu-22.04
 
     steps:
@@ -184,13 +214,14 @@ jobs:
             libxdo-dev \
             libssl-dev \
             libayatana-appindicator3-dev \
+            libfuse2 \
             librsvg2-dev \
             patchelf \
             build-essential \
             file
 
       - name: Setup pnpm
-        uses: pnpm/action-setup@v4
+        uses: pnpm/action-setup@f40ffcd9367d9f12939873eb1018b921a783ffaa
         with:
           version: 10
 
@@ -201,7 +232,7 @@ jobs:
           cache: 'pnpm'
 
       - name: Setup Rust
-        uses: dtolnay/rust-toolchain@stable
+        uses: dtolnay/rust-toolchain@29eef336d9b2848a0b548edc03f92a220660cdb8
         with:
           components: clippy
 

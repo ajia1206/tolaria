@@ -4,6 +4,7 @@ import {
   PositionPopover,
   useBlockNoteEditor,
   useComponentsContext,
+  useDictionary,
   useEditorState,
   useExtension,
   useExtensionState,
@@ -25,6 +26,7 @@ import type {
   StyleSchema,
 } from '@blocknote/core'
 import { FormattingToolbarExtension } from '@blocknote/core/extensions'
+import { useEditorComposing } from './useEditorComposing'
 import {
   useCallback,
   useEffect,
@@ -43,18 +45,20 @@ import {
   Menu as MantineMenu,
 } from '@mantine/core'
 import {
-  Bold,
-  ChevronDown,
-  Code2,
-  Italic,
-  Strikethrough,
-  type LucideIcon,
-} from 'lucide-react'
+  ArrowSquareOut as ExternalLink,
+  CaretDown as ChevronDown,
+  Code as Code2,
+  TextB as Bold,
+  TextItalic as Italic,
+  TextStrikethrough as Strikethrough,
+  type Icon as PhosphorIcon,
+} from '@phosphor-icons/react'
 import {
   filterTolariaFormattingToolbarItems,
   getTolariaBlockTypeSelectItems,
 } from './tolariaEditorFormattingConfig'
 import { useBlockNoteFormattingToolbarHoverGuard } from './blockNoteFormattingToolbarHoverGuard'
+import { openEditorAttachmentOrUrl } from './editorAttachmentActions'
 
 type TolariaBasicTextStyle = 'bold' | 'italic' | 'strike' | 'code'
 
@@ -130,6 +134,27 @@ function useFormattingToolbarCloseGrace({
   return { closeGraceActive, clearCloseGrace }
 }
 
+type FormattingToolbarStore = {
+  setState(open: boolean): void
+}
+
+function useDeduplicatedFormattingToolbarStore(
+  store: FormattingToolbarStore,
+  show: boolean,
+) {
+  const openRef = useRef(show)
+
+  useEffect(() => {
+    openRef.current = show
+  }, [show])
+
+  return useCallback((open: boolean) => {
+    if (openRef.current === open) return
+    openRef.current = open
+    store.setState(open)
+  }, [store])
+}
+
 const TOLARIA_BASIC_TEXT_STYLE_TOOLTIPS = {
   bold: {
     label: 'Bold',
@@ -161,11 +186,16 @@ const TOLARIA_BASIC_TEXT_STYLE_ICONS = {
   italic: Italic,
   strike: Strikethrough,
   code: Code2,
-} satisfies Record<TolariaBasicTextStyle, LucideIcon>
+} satisfies Record<TolariaBasicTextStyle, PhosphorIcon>
 
 type TolariaSelectedBlock = ReturnType<
   BlockNoteEditor<BlockSchema, InlineContentSchema, StyleSchema>['getTextCursorPosition']
 >['block']
+
+type TolariaSelectedFileBlock = {
+  type: string
+  url: string
+}
 
 const FORMATTING_TOOLBAR_FILE_BLOCK_TYPES = new Set([
   'audio',
@@ -200,10 +230,14 @@ function editorSupportsTextStyle(
   style: TolariaBasicTextStyle,
   editor: BlockNoteEditor<BlockSchema, InlineContentSchema, StyleSchema>,
 ) {
+  const styleSchema = Reflect.get(editor.schema.styleSchema, style) as {
+    type?: string
+    propSchema?: unknown
+  } | undefined
   return (
     style in editor.schema.styleSchema &&
-    editor.schema.styleSchema[style].type === style &&
-    editor.schema.styleSchema[style].propSchema === 'boolean'
+    styleSchema?.type === style &&
+    styleSchema.propSchema === 'boolean'
   )
 }
 
@@ -270,7 +304,7 @@ function isSelectedBlockTypeItem(
 
   return Object.entries(item.props || {}).every(
     ([propName, propValue]) =>
-      propValue === firstSelectedBlock.props[propName],
+      propValue === Reflect.get(firstSelectedBlock.props, propName),
   )
 }
 
@@ -301,12 +335,40 @@ function getTolariaBlockTypeSelectOptions(
 function getFormattingToolbarBridgeBlockId(
   editor: BlockNoteEditor<BlockSchema, InlineContentSchema, StyleSchema>,
 ) {
-  const selectedBlock = getSelectedBlocksSafely(editor)[0]
+  const selectedBlock = getSelectedBlocksSafely(editor).at(0)
   if (!selectedBlock) return null
 
   return FORMATTING_TOOLBAR_FILE_BLOCK_TYPES.has(selectedBlock.type)
     ? selectedBlock.id
     : null
+}
+
+function getSelectedFileBlockState(
+  editor: BlockNoteEditor<BlockSchema, InlineContentSchema, StyleSchema>,
+): TolariaSelectedFileBlock | null {
+  const selectedBlocks = getSelectedBlocksSafely(editor)
+  if (selectedBlocks.length !== 1) return null
+
+  const block = selectedBlocks.at(0)
+  if (!block) return null
+  if (!FORMATTING_TOOLBAR_FILE_BLOCK_TYPES.has(block.type)) return null
+
+  const url = (block.props as Record<string, unknown>).url
+  return typeof url === 'string' && url.trim().length > 0
+    ? { type: block.type, url }
+    : null
+}
+
+function fileDownloadTooltip(dict: unknown, blockType: string): string {
+  const tooltip = (dict as {
+    formatting_toolbar?: {
+      file_download?: {
+        tooltip?: Record<string, string>
+      }
+    }
+  }).formatting_toolbar?.file_download?.tooltip
+
+  return (tooltip ? Reflect.get(tooltip, blockType) as string | undefined : undefined) ?? tooltip?.file ?? 'Download file'
 }
 
 function getFormattingToolbarAnchorElement(
@@ -355,8 +417,12 @@ function TolariaBasicTextStyleButton({
 
   if (buttonState === undefined) return null
 
-  const Icon = TOLARIA_BASIC_TEXT_STYLE_ICONS[basicTextStyle]
-  const copy = TOLARIA_BASIC_TEXT_STYLE_TOOLTIPS[basicTextStyle]
+  const Icon = Reflect.get(TOLARIA_BASIC_TEXT_STYLE_ICONS, basicTextStyle) as PhosphorIcon
+  const copy = Reflect.get(TOLARIA_BASIC_TEXT_STYLE_TOOLTIPS, basicTextStyle) as {
+    label: string
+    mainTooltip: string
+    secondaryTooltip: string
+  }
 
   return (
     <Components.FormattingToolbar.Button
@@ -437,7 +503,46 @@ function TolariaBlockTypeSelect() {
   )
 }
 
-function replaceToolbarControls(items: ReactElement[]) {
+function TolariaFileDownloadButton({ vaultPath }: { vaultPath?: string }) {
+  const Components = useComponentsContext()!
+  const dict = useDictionary()
+  const editor = useBlockNoteEditor<
+    BlockSchema,
+    InlineContentSchema,
+    StyleSchema
+  >()
+  const selectedFileBlock = useEditorState({
+    editor,
+    selector: ({ editor }) => getSelectedFileBlockState(editor),
+  })
+  const handleOpen = useCallback(() => {
+    if (!selectedFileBlock) return
+
+    editor.focus()
+    openEditorAttachmentOrUrl({
+      url: selectedFileBlock.url,
+      vaultPath,
+      source: 'file',
+    })
+  }, [editor, selectedFileBlock, vaultPath])
+
+  if (!selectedFileBlock || !editor.isEditable) return null
+
+  const label = fileDownloadTooltip(dict, selectedFileBlock.type)
+  return (
+    <Components.FormattingToolbar.Button
+      className="bn-button"
+      data-test="fileDownload"
+      onClick={handleOpen}
+      isSelected={false}
+      label={label}
+      mainTooltip={label}
+      icon={<ExternalLink />}
+    />
+  )
+}
+
+function replaceToolbarControls(items: ReactElement[], vaultPath?: string) {
   return items.flatMap((item) => {
     switch (String(item.key)) {
       case 'blockTypeSelect':
@@ -448,6 +553,8 @@ function replaceToolbarControls(items: ReactElement[]) {
         return [<TolariaBasicTextStyleButton basicTextStyle="italic" key={item.key} />]
       case 'strikeStyleButton':
         return [<TolariaBasicTextStyleButton basicTextStyle="strike" key={item.key} />]
+      case 'fileDownloadButton':
+        return [<TolariaFileDownloadButton key={item.key} vaultPath={vaultPath} />]
       default:
         return [item]
     }
@@ -467,18 +574,19 @@ function insertInlineCodeButton(items: ReactElement[]) {
   ]
 }
 
-function getTolariaFormattingToolbarItems() {
+function getTolariaFormattingToolbarItems(vaultPath?: string) {
   return insertInlineCodeButton(
     replaceToolbarControls(
       filterTolariaFormattingToolbarItems(
         getFormattingToolbarItems(),
       ),
+      vaultPath,
     ),
   )
 }
 
-export function TolariaFormattingToolbar() {
-  return <FormattingToolbar>{getTolariaFormattingToolbarItems()}</FormattingToolbar>
+export function TolariaFormattingToolbar({ vaultPath }: { vaultPath?: string } = {}) {
+  return <FormattingToolbar>{getTolariaFormattingToolbarItems(vaultPath)}</FormattingToolbar>
 }
 
 export function TolariaFormattingToolbarController(props: {
@@ -496,6 +604,7 @@ export function TolariaFormattingToolbarController(props: {
   const show = useExtensionState(FormattingToolbarExtension, {
     editor,
   })
+  const isComposing = useEditorComposing(editor)
   const [toolbarHasFocus, setToolbarHasFocus] = useState(false)
   const [toolbarHovered, setToolbarHovered] = useState(false)
   const { closeGraceActive, clearCloseGrace } = useFormattingToolbarCloseGrace({
@@ -503,8 +612,13 @@ export function TolariaFormattingToolbarController(props: {
     toolbarHasFocus,
     toolbarHovered,
   })
+  const setFormattingToolbarOpen = useDeduplicatedFormattingToolbarStore(
+    formattingToolbar.store,
+    show,
+  )
 
-  const isOpen = show || toolbarHasFocus || toolbarHovered || closeGraceActive
+  const isOpen = !isComposing
+    && (show || toolbarHasFocus || toolbarHovered || closeGraceActive)
   const hasFloatingToolbarAnchor = getFormattingToolbarAnchorElement(editor) !== null
   const shouldRenderFloatingToolbar = isOpen && hasFloatingToolbarAnchor
   const currentBridgeBlockId = useEditorState({
@@ -556,7 +670,7 @@ export function TolariaFormattingToolbarController(props: {
       useFloatingOptions: {
         open: shouldRenderFloatingToolbar,
         onOpenChange: (open, _event, reason) => {
-          formattingToolbar.store.setState(open)
+          setFormattingToolbarOpen(open)
           if (!open) {
             setToolbarHasFocus(false)
             setToolbarHovered(false)
@@ -579,9 +693,9 @@ export function TolariaFormattingToolbarController(props: {
     [
       clearCloseGrace,
       editor,
-      formattingToolbar.store,
       placement,
       props.floatingUIOptions,
+      setFormattingToolbarOpen,
       shouldRenderFloatingToolbar,
     ],
   )
@@ -611,7 +725,7 @@ export function TolariaFormattingToolbarController(props: {
             }
 
             setToolbarHasFocus(false)
-            formattingToolbar.store.setState(false)
+            setFormattingToolbarOpen(false)
           }}
         >
           <Component />

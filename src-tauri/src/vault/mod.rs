@@ -6,13 +6,21 @@ pub(crate) mod filename_rules;
 mod folders;
 mod frontmatter;
 mod getting_started;
+mod ignored;
 mod image;
 mod migration;
 mod parsing;
+pub(crate) mod path_identity;
 mod rename;
 mod rename_transaction;
 mod title_sync;
 mod trash;
+mod view_date_filters;
+mod view_migration;
+mod view_relationships;
+#[cfg(test)]
+mod view_tests;
+mod view_value_conversions;
 mod views;
 
 pub use cache::{invalidate_cache, scan_vault_cached};
@@ -21,15 +29,17 @@ pub use config_seed::{
     seed_config_files, AiGuidanceFileState, VaultAiGuidanceStatus,
 };
 pub use entry::{FolderNode, VaultEntry};
-pub use file::{create_note_content, get_note_content, save_note_content};
+pub use file::{create_note_content, get_note_content, note_content_matches, save_note_content};
 pub use folders::{delete_folder, rename_folder, FolderRenameResult};
 pub use getting_started::{create_getting_started_vault, default_vault_path, vault_exists};
+pub use ignored::{filter_gitignored_entries, filter_gitignored_folders, filter_gitignored_paths};
 pub use image::{copy_image_to_vault, save_image};
 pub use migration::migrate_is_a_to_type;
 pub use rename::{
-    auto_rename_untitled, detect_renames, move_note_to_folder, rename_note, rename_note_filename,
-    update_wikilinks_for_renames, AutoRenameUntitledRequest, DetectedRename,
-    MoveNoteToFolderRequest, RenameNoteFilenameRequest, RenameNoteRequest, RenameResult,
+    auto_rename_untitled, detect_renames, move_note_to_folder, move_note_to_workspace, rename_note,
+    rename_note_filename, update_wikilinks_for_renames, AutoRenameUntitledRequest, DetectedRename,
+    MoveNoteToFolderRequest, MoveNoteToWorkspaceRequest, RenameNoteFilenameRequest,
+    RenameNoteRequest, RenameResult,
 };
 pub use title_sync::{sync_title_on_open, SyncAction};
 pub use trash::{batch_delete_notes, delete_note};
@@ -39,7 +49,7 @@ pub use views::{
 };
 
 use file::read_file_metadata;
-use frontmatter::{extract_fm_and_rels, resolve_is_a};
+use frontmatter::{extract_fm_and_rels, resolve_is_a, resolve_note_width};
 use parsing::{count_body_words, extract_outgoing_links, extract_snippet, extract_title};
 
 use gray_matter::engine::YAML;
@@ -149,6 +159,7 @@ pub fn parse_md_file(path: &Path, git_dates: Option<(u64, u64)>) -> Result<Vault
         template: frontmatter.template.and_then(|v| v.into_scalar()),
         sort: frontmatter.sort.and_then(|v| v.into_scalar()),
         view: frontmatter.view.and_then(|v| v.into_scalar()),
+        note_width: resolve_note_width(frontmatter.note_width),
         visible: frontmatter.visible,
         organized: frontmatter.organized.unwrap_or(false),
         favorite: frontmatter.favorite.unwrap_or(false),
@@ -346,11 +357,7 @@ fn lookup_git_dates(
     vault_path: &Path,
     git_dates: &HashMap<String, GitDates>,
 ) -> Option<(u64, u64)> {
-    let rel = path
-        .strip_prefix(vault_path)
-        .ok()?
-        .to_string_lossy()
-        .to_string();
+    let rel = path_identity::vault_relative_path_string(vault_path, path).ok()?;
     git_dates.get(&rel).map(|d| (d.modified_at, d.created_at))
 }
 
@@ -459,11 +466,10 @@ pub fn scan_vault_folders(vault_path: &Path) -> Result<Vec<FolderNode>, String> 
             if is_folder_tree_hidden_dir(&name) {
                 continue;
             }
-            let rel_path = path
-                .strip_prefix(vault_root)
-                .unwrap_or(&path)
-                .to_string_lossy()
-                .replace('\\', "/");
+            let rel_path = path_identity::vault_relative_path_string(vault_root, &path)
+                .unwrap_or_else(|_| {
+                    path_identity::normalize_path_for_identity(&path.to_string_lossy())
+                });
             let children = build_tree(&path, vault_root);
             nodes.push(FolderNode {
                 name,

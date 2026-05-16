@@ -11,7 +11,7 @@ export interface NoteSearchResult extends NoteSearchResultItem {
   entry: VaultEntry
 }
 
-function toResult(e: VaultEntry, typeEntryMap: Record<string, VaultEntry>): NoteSearchResult {
+function toResult(e: VaultEntry, typeEntryMap: Record<string, VaultEntry>, showWorkspace: boolean): NoteSearchResult {
   const noteType = e.isA || undefined
   const te = typeEntryMap[e.isA ?? '']
   return {
@@ -22,6 +22,7 @@ function toResult(e: VaultEntry, typeEntryMap: Record<string, VaultEntry>): Note
     typeColor: noteType ? getTypeColor(e.isA, te?.color) : undefined,
     typeLightColor: noteType ? getTypeLightColor(e.isA, te?.color) : undefined,
     TypeIcon: noteType ? getTypeIcon(e.isA, te?.icon) : undefined,
+    workspace: showWorkspace ? e.workspace ?? null : null,
   }
 }
 
@@ -36,9 +37,13 @@ export function useNoteSearch(entries: VaultEntry[], query: string, maxResults =
     () => entries.filter((e) => !SEARCH_EXCLUDED_TYPES.has(e.isA ?? '')),
     [entries],
   )
+  const showWorkspace = useMemo(
+    () => new Set(entries.map((entry) => entry.workspace?.alias).filter(Boolean)).size > 1,
+    [entries],
+  )
 
   const results: NoteSearchResult[] = useMemo(() => {
-    const mapResult = (e: VaultEntry) => toResult(e, typeEntryMap)
+    const mapResult = (e: VaultEntry) => toResult(e, typeEntryMap, showWorkspace)
     if (!query.trim()) {
       return [...searchableEntries]
         .sort((a, b) => (b.modifiedAt ?? 0) - (a.modifiedAt ?? 0))
@@ -55,13 +60,13 @@ export function useNoteSearch(entries: VaultEntry[], query: string, maxResults =
       .sort((a, b) => a.rank - b.rank || b.score - a.score)
       .slice(0, maxResults)
       .map((r) => mapResult(r.entry))
-  }, [searchableEntries, query, maxResults, typeEntryMap])
+  }, [searchableEntries, query, maxResults, typeEntryMap, showWorkspace])
 
   useEffect(() => {
     setSelectedIndex(0) // eslint-disable-line react-hooks/set-state-in-effect -- reset on query change
   }, [query])
 
-  const selectedEntry = results[selectedIndex]?.entry ?? null
+  const selectedEntry = results.at(selectedIndex)?.entry ?? null
 
   const handleKeyDown = useCallback(
     (e: React.KeyboardEvent | KeyboardEvent) => {

@@ -1,5 +1,25 @@
-import type { VaultEntry, ViewDefinition, FilterGroup, FilterNode, FilterCondition } from '../types'
+import type { VaultEntry, ViewDefinition, FilterGroup, FilterNode, FilterCondition, VaultPropertyValue } from '../types'
 import { toDateFilterTimestamp } from './filterDates'
+import { compileSafeUserRegex } from './safeRegex'
+import { evaluateArrayFieldCondition, type ViewFilterArrayKind } from './viewFilterArrayFields'
+
+type FieldScalar = string | number | boolean | null
+type ResolvedField =
+  | { kind: 'scalar'; value: FieldScalar }
+  | { kind: 'array'; values: string[]; arrayKind: ViewFilterArrayKind }
+type BuiltInFieldReader = (entry: VaultEntry) => ResolvedField
+type TextOp = FilterCondition['op']
+
+const BUILT_IN_FIELD_READERS = new Map<string, BuiltInFieldReader>([
+  ['type', (entry) => scalarField(entry.isA)],
+  ['isa', (entry) => scalarField(entry.isA)],
+  ['status', (entry) => scalarField(entry.status)],
+  ['title', (entry) => scalarField(entry.title)],
+  ['filename', (entry) => scalarField(entry.filename)],
+  ['archived', (entry) => scalarField(entry.archived)],
+  ['favorite', (entry) => scalarField(entry.favorite)],
+  ['body', (entry) => scalarField(entry.snippet)],
+])
 
 /** Evaluate a view's filters against a list of entries, returning only matches. */
 export function evaluateView(definition: ViewDefinition, entries: VaultEntry[]): VaultEntry[] {
@@ -21,63 +41,39 @@ function evaluateNode(node: FilterNode, entry: VaultEntry): boolean {
   return evaluateCondition(node as FilterCondition, entry)
 }
 
-function resolveField(entry: VaultEntry, field: string): { scalar?: string | number | boolean | null; array?: string[] } {
+function findCaseInsensitiveKey(record: Record<string, unknown>, lower: string): string | undefined {
+  return Object.keys(record).find((k) => k.toLowerCase() === lower)
+}
+
+function scalarField(value: FieldScalar): ResolvedField {
+  return { kind: 'scalar', value }
+}
+
+function arrayField(values: string[], arrayKind: ViewFilterArrayKind): ResolvedField {
+  return { kind: 'array', values, arrayKind }
+}
+
+function propertyField(value: VaultPropertyValue): ResolvedField {
+  if (Array.isArray(value)) return arrayField(value.map(toString), 'property')
+  return scalarField(value)
+}
+
+function resolveRelationshipField(entry: VaultEntry, lower: string): ResolvedField | null {
+  const relKey = findCaseInsensitiveKey(entry.relationships, lower)
+  return relKey ? arrayField(Reflect.get(entry.relationships, relKey) as string[], 'relationship') : null
+}
+
+function resolvePropertyField(entry: VaultEntry, lower: string): ResolvedField | null {
+  const propKey = findCaseInsensitiveKey(entry.properties, lower)
+  return propKey ? propertyField(Reflect.get(entry.properties, propKey) as VaultPropertyValue) : null
+}
+
+function resolveField(entry: VaultEntry, field: string): ResolvedField {
   const lower = field.toLowerCase()
-  if (lower === 'type' || lower === 'isa') return { scalar: entry.isA }
-  if (lower === 'status') return { scalar: entry.status }
-  if (lower === 'title') return { scalar: entry.title }
-  if (lower === 'filename') return { scalar: entry.filename }
-  if (lower === 'archived') return { scalar: entry.archived }
-  if (lower === 'favorite') return { scalar: entry.favorite }
-  if (lower === 'body') return { scalar: entry.snippet }
-
-  // Check relationships first (returns string[])
-  const relKey = Object.keys(entry.relationships).find((k) => k.toLowerCase() === lower)
-  if (relKey) return { array: entry.relationships[relKey] }
-
-  // Then properties (returns scalar)
-  const propKey = Object.keys(entry.properties).find((k) => k.toLowerCase() === lower)
-  if (propKey) return { scalar: entry.properties[propKey] }
-
-  return { scalar: null }
-}
-
-function wikilinkStem(raw: string): string {
-  let s = raw.trim()
-  if (s.startsWith('[[')) s = s.slice(2)
-  if (s.endsWith(']]')) s = s.slice(0, -2)
-  const pipe = s.indexOf('|')
-  if (pipe >= 0) s = s.substring(0, pipe)
-  return s.toLowerCase()
-}
-
-function relationshipCandidates(raw: string): string[] {
-  const trimmed = raw.trim()
-  let inner = trimmed
-  if (inner.startsWith('[[')) inner = inner.slice(2)
-  if (inner.endsWith(']]')) inner = inner.slice(0, -2)
-  const pipe = inner.indexOf('|')
-  if (pipe >= 0) {
-    return [trimmed, inner.slice(0, pipe), inner.slice(pipe + 1)]
-  }
-  return [trimmed, inner]
-}
-
-/** Extract all comparable parts (path and alias) from a wikilink string. */
-function wikilinkParts(raw: string): string[] {
-  let s = raw.trim()
-  if (s.startsWith('[[')) s = s.slice(2)
-  if (s.endsWith(']]')) s = s.slice(0, -2)
-  const pipe = s.indexOf('|')
-  if (pipe >= 0) return [s.substring(0, pipe).toLowerCase(), s.substring(pipe + 1).toLowerCase()]
-  return [s.toLowerCase()]
-}
-
-/** Check if two wikilink values match by comparing all path/alias combinations. */
-function wikilinkEquals(a: string, b: string): boolean {
-  const partsA = wikilinkParts(a)
-  const partsB = wikilinkParts(b)
-  return partsA.some(pa => partsB.some(pb => pa === pb))
+  return BUILT_IN_FIELD_READERS.get(lower)?.(entry)
+    ?? resolveRelationshipField(entry, lower)
+    ?? resolvePropertyField(entry, lower)
+    ?? scalarField(null)
 }
 
 function toString(v: unknown): string {
@@ -88,11 +84,8 @@ function toString(v: unknown): string {
 
 function compileRegex(cond: FilterCondition, value: string): RegExp | null {
   if (cond.regex !== true) return null
-  try {
-    return new RegExp(value, 'i')
-  } catch {
-    return null
-  }
+  const compiled = compileSafeUserRegex(value, 'i')
+  return compiled.ok ? compiled.pattern : null
 }
 
 function usesRegex(cond: FilterCondition): boolean {
@@ -100,83 +93,103 @@ function usesRegex(cond: FilterCondition): boolean {
     && (cond.op === 'contains' || cond.op === 'not_contains' || cond.op === 'equals' || cond.op === 'not_equals')
 }
 
-function evaluateCondition(cond: FilterCondition, entry: VaultEntry): boolean {
-  const resolved = resolveField(entry, cond.field)
-  const { op, value } = cond
-
+function evaluateEmptyCondition(op: FilterCondition['op'], resolved: ReturnType<typeof resolveField>): boolean | null {
   if (op === 'is_empty') {
-    if (resolved.array) return resolved.array.length === 0
-    const s = resolved.scalar
+    if (resolved.kind === 'array') return resolved.values.length === 0
+    const s = resolved.value
     return s == null || s === '' || s === false
   }
   if (op === 'is_not_empty') {
-    if (resolved.array) return resolved.array.length > 0
-    const s = resolved.scalar
+    if (resolved.kind === 'array') return resolved.values.length > 0
+    const s = resolved.value
     return s != null && s !== '' && s !== false
   }
+  return null
+}
 
-  const condVal = toString(value)
-  const regex = usesRegex(cond) ? compileRegex(cond, condVal) : null
+function textMatchResult(op: FilterCondition['op'], matched: boolean): boolean {
+  if (op === 'contains' || op === 'equals') return matched
+  if (op === 'not_contains' || op === 'not_equals') return !matched
+  return false
+}
 
-  if (usesRegex(cond) && !regex) return false
+function evaluateArrayCondition(cond: FilterCondition, resolved: Extract<ResolvedField, { kind: 'array' }>, condVal: string, regex: RegExp | null): boolean {
+  return evaluateArrayFieldCondition({
+    cond,
+    values: resolved.values,
+    arrayKind: resolved.arrayKind,
+    condVal,
+    regex,
+  })
+}
 
-  if (resolved.array) {
-    if (regex) {
-      const matched = resolved.array.some((item) => relationshipCandidates(item).some((candidate) => regex.test(candidate)))
-      if (op === 'contains' || op === 'equals') return matched
-      if (op === 'not_contains' || op === 'not_equals') return !matched
-    }
+function evaluateRegexScalarCondition(op: FilterCondition['op'], fieldRaw: string, regex: RegExp): boolean {
+  return textMatchResult(op, regex.test(fieldRaw))
+}
 
-    const stem = wikilinkStem(condVal)
-    const isWikilink = condVal.trim().startsWith('[[')
-    const arrayMatch = (arr: string[]) => arr.some((item) =>
-      isWikilink ? wikilinkEquals(item, condVal) : wikilinkStem(item).includes(stem)
-    )
-    if (op === 'contains') return arrayMatch(resolved.array)
-    if (op === 'not_contains') return !arrayMatch(resolved.array)
-    if (op === 'any_of' && Array.isArray(value)) {
-      return resolved.array.some((item) =>
-        (value as string[]).some((v) => wikilinkEquals(item, v))
-      )
-    }
-    if (op === 'none_of' && Array.isArray(value)) {
-      return !resolved.array.some((item) =>
-        (value as string[]).some((v) => wikilinkEquals(item, v))
-      )
-    }
-    return false
-  }
+function conditionList(value: unknown): string[] | null {
+  return Array.isArray(value) ? value.map(toString) : null
+}
 
-  const fieldRaw = toString(resolved.scalar)
-  if (regex) {
-    const matched = regex.test(fieldRaw)
-    if (op === 'equals' || op === 'contains') return matched
-    if (op === 'not_equals' || op === 'not_contains') return !matched
-  }
-
-  const fieldStr = fieldRaw.toLowerCase()
-  const condStr = condVal.toLowerCase()
-
+function evaluateTextComparison(op: TextOp, fieldStr: string, condStr: string): boolean | null {
   if (op === 'equals') return fieldStr === condStr
   if (op === 'not_equals') return fieldStr !== condStr
   if (op === 'contains') return fieldStr.includes(condStr)
   if (op === 'not_contains') return !fieldStr.includes(condStr)
-  if (op === 'any_of' && Array.isArray(value)) return (value as string[]).some((v) => toString(v).toLowerCase() === fieldStr)
-  if (op === 'none_of' && Array.isArray(value)) return !(value as string[]).some((v) => toString(v).toLowerCase() === fieldStr)
+  return null
+}
 
-  // Date comparisons
-  if (op === 'before' || op === 'after') {
-    let tsMs: number | null = null
-    if (typeof resolved.scalar === 'number') {
-      tsMs = resolved.scalar * 1000 // Unix timestamp (seconds) → milliseconds
-    } else if (typeof resolved.scalar === 'string') {
-      tsMs = toDateFilterTimestamp(resolved.scalar)
-    }
-    if (tsMs == null) return false
-    const target = toDateFilterTimestamp(condVal)
-    if (target == null) return false
-    return op === 'before' ? tsMs < target : tsMs > target
+function evaluateTextSetCondition(op: TextOp, fieldStr: string, values: string[] | null): boolean | null {
+  if (!values) return null
+  const matched = values.some((v) => v.toLowerCase() === fieldStr)
+  if (op === 'any_of') return matched
+  if (op === 'none_of') return !matched
+  return null
+}
+
+function evaluateTextCondition(cond: FilterCondition, fieldRaw: string, condVal: string, regex: RegExp | null): boolean {
+  const { op } = cond
+  if (regex) return evaluateRegexScalarCondition(op, fieldRaw, regex)
+
+  const fieldStr = fieldRaw.toLowerCase()
+  const condStr = condVal.toLowerCase()
+  return evaluateTextComparison(op, fieldStr, condStr)
+    ?? evaluateTextSetCondition(op, fieldStr, conditionList(cond.value))
+    ?? false
+}
+
+function fieldTimestamp(value: string | number | boolean | null | undefined): number | null {
+  if (typeof value === 'number') return value * 1000 // Unix timestamp (seconds) -> milliseconds
+  if (typeof value === 'string') return toDateFilterTimestamp(value)
+  return null
+}
+
+function evaluateDateCondition(cond: FilterCondition, scalar: string | number | boolean | null | undefined, condVal: string): boolean {
+  if (cond.op !== 'before' && cond.op !== 'after') return false
+
+  const tsMs = fieldTimestamp(scalar)
+  if (tsMs == null) return false
+  const target = toDateFilterTimestamp(condVal)
+  if (target == null) return false
+  return cond.op === 'before' ? tsMs < target : tsMs > target
+}
+
+function evaluateCondition(cond: FilterCondition, entry: VaultEntry): boolean {
+  const resolved = resolveField(entry, cond.field)
+  const emptyResult = evaluateEmptyCondition(cond.op, resolved)
+  if (emptyResult !== null) return emptyResult
+
+  const condVal = toString(cond.value)
+  const regex = usesRegex(cond) ? compileRegex(cond, condVal) : null
+  if (usesRegex(cond) && !regex) return false
+
+  if (resolved.kind === 'array') {
+    return evaluateArrayCondition(cond, resolved, condVal, regex)
   }
 
-  return false
+  if (cond.op === 'before' || cond.op === 'after') {
+    return evaluateDateCondition(cond, resolved.value, condVal)
+  }
+
+  return evaluateTextCondition(cond, toString(resolved.value), condVal, regex)
 }

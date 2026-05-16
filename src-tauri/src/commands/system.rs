@@ -1,5 +1,7 @@
 #[cfg(desktop)]
-use std::process::Command;
+use std::io::Write;
+#[cfg(desktop)]
+use std::process::{Command, Stdio};
 
 #[cfg(desktop)]
 use crate::menu;
@@ -131,6 +133,146 @@ pub async fn check_mcp_status(vault_path: String) -> Result<crate::mcp::McpStatu
         .map_err(|e| format!("MCP status check failed: {e}"))
 }
 
+#[cfg(desktop)]
+#[tauri::command]
+pub async fn get_mcp_config_snippet(vault_path: String) -> Result<String, String> {
+    let vault_path = super::expand_tilde(&vault_path).into_owned();
+    tokio::task::spawn_blocking(move || crate::mcp::mcp_config_snippet(&vault_path))
+        .await
+        .map_err(|e| format!("MCP config task failed: {e}"))?
+}
+
+#[cfg(target_os = "macos")]
+fn clipboard_command() -> Command {
+    crate::hidden_command("pbcopy")
+}
+
+#[cfg(target_os = "macos")]
+fn clipboard_read_command() -> Command {
+    crate::hidden_command("pbpaste")
+}
+
+#[cfg(target_os = "windows")]
+fn clipboard_command() -> Command {
+    crate::hidden_command("clip.exe")
+}
+
+#[cfg(target_os = "windows")]
+fn clipboard_read_command() -> Command {
+    let mut command = crate::hidden_command("powershell.exe");
+    command.args(["-NoProfile", "-Command", "Get-Clipboard -Raw"]);
+    command
+}
+
+#[cfg(all(desktop, not(any(target_os = "macos", target_os = "windows"))))]
+fn clipboard_command() -> Command {
+    let mut command = crate::hidden_command("sh");
+    command.args([
+        "-c",
+        "if command -v wl-copy >/dev/null 2>&1; then wl-copy; elif command -v xclip >/dev/null 2>&1; then xclip -selection clipboard; elif command -v xsel >/dev/null 2>&1; then xsel --clipboard --input; else exit 127; fi",
+    ]);
+    command
+}
+
+#[cfg(all(desktop, not(any(target_os = "macos", target_os = "windows"))))]
+fn clipboard_read_command() -> Command {
+    let mut command = crate::hidden_command("sh");
+    command.args([
+        "-c",
+        "if command -v wl-paste >/dev/null 2>&1; then wl-paste; elif command -v xclip >/dev/null 2>&1; then xclip -selection clipboard -out; elif command -v xsel >/dev/null 2>&1; then xsel --clipboard --output; else exit 127; fi",
+    ]);
+    command
+}
+
+#[cfg(desktop)]
+fn clipboard_failure_message(stderr: &[u8]) -> String {
+    let message = String::from_utf8_lossy(stderr).trim().to_string();
+    if message.is_empty() {
+        "Native clipboard command failed".to_string()
+    } else {
+        format!("Native clipboard command failed: {message}")
+    }
+}
+
+#[cfg(desktop)]
+fn write_native_clipboard(mut command: Command, text: &str) -> Result<(), String> {
+    let mut child = command
+        .stdin(Stdio::piped())
+        .stdout(Stdio::null())
+        .stderr(Stdio::piped())
+        .spawn()
+        .map_err(|e| format!("Failed to open native clipboard command: {e}"))?;
+
+    let mut stdin = child
+        .stdin
+        .take()
+        .ok_or_else(|| "Native clipboard command did not expose stdin".to_string())?;
+    stdin
+        .write_all(text.as_bytes())
+        .map_err(|e| format!("Failed to write native clipboard text: {e}"))?;
+    drop(stdin);
+
+    let output = child
+        .wait_with_output()
+        .map_err(|e| format!("Native clipboard command did not finish: {e}"))?;
+    if output.status.success() {
+        Ok(())
+    } else {
+        Err(clipboard_failure_message(&output.stderr))
+    }
+}
+
+#[cfg(desktop)]
+fn read_native_clipboard(mut command: Command) -> Result<String, String> {
+    let output = command
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .output()
+        .map_err(|e| format!("Failed to read native clipboard text: {e}"))?;
+
+    if output.status.success() {
+        Ok(String::from_utf8_lossy(&output.stdout).to_string())
+    } else {
+        Err(clipboard_failure_message(&output.stderr))
+    }
+}
+
+#[cfg(desktop)]
+#[tauri::command]
+pub fn copy_text_to_clipboard(text: String) -> Result<(), String> {
+    write_native_clipboard(clipboard_command(), &text)
+}
+
+#[cfg(desktop)]
+#[tauri::command]
+pub fn read_text_from_clipboard() -> Result<String, String> {
+    read_native_clipboard(clipboard_read_command())
+}
+
+#[cfg(desktop)]
+#[tauri::command]
+pub async fn sync_mcp_bridge_vault(
+    app: tauri::AppHandle,
+    vault_path: Option<String>,
+    vault_paths: Option<Vec<String>>,
+) -> Result<String, String> {
+    let expanded_vault_path = vault_path
+        .as_deref()
+        .map(str::trim)
+        .filter(|path| !path.is_empty())
+        .map(|path| super::expand_tilde(path).into_owned());
+    let vault_path = expanded_vault_path.as_deref().map(std::path::Path::new);
+    let expanded_vault_paths = vault_paths
+        .unwrap_or_default()
+        .into_iter()
+        .map(|path| super::expand_tilde(path.trim()).into_owned())
+        .filter(|path| !path.is_empty())
+        .map(std::path::PathBuf::from)
+        .collect::<Vec<_>>();
+
+    crate::sync_ws_bridge_for_vault(&app, vault_path, &expanded_vault_paths).map(str::to_string)
+}
+
 // ── MCP commands (mobile stubs) ─────────────────────────────────────────────
 
 #[cfg(mobile)]
@@ -151,6 +293,33 @@ pub async fn check_mcp_status(_vault_path: String) -> Result<crate::mcp::McpStat
     Ok(crate::mcp::McpStatus::NotInstalled)
 }
 
+#[cfg(mobile)]
+#[tauri::command]
+pub async fn get_mcp_config_snippet(_vault_path: String) -> Result<String, String> {
+    Err("MCP is not available on mobile".into())
+}
+
+#[cfg(mobile)]
+#[tauri::command]
+pub fn copy_text_to_clipboard(_text: String) -> Result<(), String> {
+    Err("Clipboard is not available on mobile".into())
+}
+
+#[cfg(mobile)]
+#[tauri::command]
+pub fn read_text_from_clipboard() -> Result<String, String> {
+    Err("Clipboard is not available on mobile".into())
+}
+
+#[cfg(mobile)]
+#[tauri::command]
+pub async fn sync_mcp_bridge_vault(
+    _vault_path: Option<String>,
+    _vault_paths: Option<Vec<String>>,
+) -> Result<String, String> {
+    Err("MCP is not available on mobile".into())
+}
+
 // ── Menu commands ───────────────────────────────────────────────────────────
 
 #[derive(Debug, Deserialize)]
@@ -162,7 +331,7 @@ pub struct MenuStateUpdate {
     has_restorable_deleted_note: Option<bool>,
     has_no_remote: Option<bool>,
     note_list_search_enabled: Option<bool>,
-    locale: Option<String>,
+    editor_find_enabled: Option<bool>,
 }
 
 #[cfg(desktop)]
@@ -171,10 +340,6 @@ pub fn update_menu_state(
     app_handle: tauri::AppHandle,
     state: MenuStateUpdate,
 ) -> Result<(), String> {
-    if let Some(locale) = state.locale.as_deref() {
-        menu::set_menu_locale(&app_handle, Some(locale))
-            .map_err(|err| format!("Failed to update menu locale: {err}"))?;
-    }
     menu::set_note_items_enabled(&app_handle, state.has_active_note);
     if let Some(v) = state.has_modified_files {
         menu::set_git_commit_items_enabled(&app_handle, v);
@@ -190,6 +355,9 @@ pub fn update_menu_state(
     }
     if let Some(v) = state.note_list_search_enabled {
         menu::set_note_list_search_items_enabled(&app_handle, v);
+    }
+    if let Some(v) = state.editor_find_enabled {
+        menu::set_editor_find_items_enabled(&app_handle, v);
     }
     Ok(())
 }
@@ -216,9 +384,33 @@ pub fn trigger_menu_command(_app_handle: tauri::AppHandle, _id: String) -> Resul
 }
 
 #[cfg(desktop)]
-#[tauri::command]
-pub fn update_current_window_min_size(
-    window: Window,
+fn should_apply_window_min_size_constraints(
+    is_windows: bool,
+    is_fullscreen: bool,
+    is_maximized: bool,
+) -> bool {
+    !(is_windows && (is_fullscreen || is_maximized))
+}
+
+#[cfg(desktop)]
+fn should_skip_window_min_size_update(window: &Window) -> Result<bool, String> {
+    if !cfg!(target_os = "windows") {
+        return Ok(false);
+    }
+
+    let is_fullscreen = window.is_fullscreen().map_err(|e| e.to_string())?;
+    let is_maximized = window.is_maximized().map_err(|e| e.to_string())?;
+
+    Ok(!should_apply_window_min_size_constraints(
+        true,
+        is_fullscreen,
+        is_maximized,
+    ))
+}
+
+#[cfg(desktop)]
+fn apply_window_min_size_update(
+    window: &Window,
     min_width: f64,
     min_height: f64,
     grow_to_fit: bool,
@@ -246,6 +438,21 @@ pub fn update_current_window_min_size(
     window
         .set_size(LogicalSize::new(next_width, next_height))
         .map_err(|e| e.to_string())
+}
+
+#[cfg(desktop)]
+#[tauri::command]
+pub fn update_current_window_min_size(
+    window: Window,
+    min_width: f64,
+    min_height: f64,
+    grow_to_fit: bool,
+) -> Result<(), String> {
+    if should_skip_window_min_size_update(&window)? {
+        return Ok(());
+    }
+
+    apply_window_min_size_update(&window, min_width, min_height, grow_to_fit)
 }
 
 #[cfg(desktop)]
@@ -453,6 +660,20 @@ mod tests {
             assert_eq!(result, Ok(()));
             assert_eq!(calls, expected_calls);
         }
+    }
+
+    #[test]
+    fn skips_min_size_updates_for_windows_fullscreen_or_maximized_windows() {
+        for (is_fullscreen, is_maximized) in [(true, false), (false, true), (true, true)] {
+            assert!(!should_apply_window_min_size_constraints(
+                true,
+                is_fullscreen,
+                is_maximized
+            ));
+        }
+
+        assert!(should_apply_window_min_size_constraints(true, false, false));
+        assert!(should_apply_window_min_size_constraints(false, true, true));
     }
 
     #[test]

@@ -9,9 +9,13 @@ interface UseMultiSelectKeyboardOptions {
   enableActionShortcuts?: boolean
 }
 
-function isInputFocused(): boolean {
-  const el = document.activeElement
-  return el instanceof HTMLInputElement || el instanceof HTMLTextAreaElement || !!(el as HTMLElement)?.isContentEditable
+function isInputHtmlElementFocused(): boolean {
+  const activeHTMLElement = document.activeElement
+  if (!(activeHTMLElement instanceof HTMLElement)) return false
+
+  return activeHTMLElement.tagName === 'INPUT'
+    || activeHTMLElement.tagName === 'TEXTAREA'
+    || activeHTMLElement.isContentEditable
 }
 
 function usesCommandModifier(event: KeyboardEvent): boolean {
@@ -25,7 +29,7 @@ function clearSelectionOnEscape(event: KeyboardEvent, multiSelect: MultiSelectSt
 }
 
 function selectVisibleNotes(event: KeyboardEvent, multiSelect: MultiSelectState, isEntityView: boolean) {
-  if (event.key !== 'a' || !(event.metaKey || event.ctrlKey) || isEntityView || isInputFocused()) return
+  if (event.key !== 'a' || !(event.metaKey || event.ctrlKey) || isEntityView || isInputHtmlElementFocused()) return
   event.preventDefault()
   multiSelect.selectAll()
 }

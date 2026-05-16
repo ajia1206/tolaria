@@ -1,7 +1,10 @@
 import {
+  useCallback,
+  useLayoutEffect,
   useMemo,
   useRef,
   useState,
+  type CSSProperties,
   type ReactNode,
 } from 'react'
 import type { VaultEntry } from '../types'
@@ -10,13 +13,19 @@ import { buildTypeEntryMap } from '../utils/typeColors'
 import {
   deleteInlineSelection,
   replaceInlineSelection,
+  selectedInlineText,
 } from './inlineWikilinkEdits'
 import {
   buildInlineWikilinkSegments,
   extractInlineWikilinkReferences,
   findActiveWikilinkQuery,
 } from './inlineWikilinkText'
-import { serializeInlineNode } from './inlineWikilinkDom'
+import { extractDroppedPathText, formatDroppedPathList } from './inlineWikilinkDropText'
+import {
+  readSelectionRange,
+  serializeInlineNode,
+  type InlineSelectionRange,
+} from './inlineWikilinkDom'
 import {
   buildPendingPasteState,
   type PendingPasteState,
@@ -31,6 +40,11 @@ import { handleInlineWikilinkKeyDown } from './inlineWikilinkKeydown'
 import { useInlineWikilinkSelection } from './useInlineWikilinkSelection'
 import { useInlineWikilinkSuggestionsState } from './useInlineWikilinkSuggestionsState'
 import { normalizeInlineWikilinkValue } from './inlineWikilinkTokens'
+import {
+  isInsertBeforeInput,
+  isPlainTextBeforeInput,
+} from './inlineWikilinkBeforeInput'
+import { useNativePathDrop } from './useNativePathDrop'
 
 interface InlineWikilinkInputProps {
   entries: VaultEntry[]
@@ -44,6 +58,7 @@ interface InlineWikilinkInputProps {
   inputRef?: React.RefObject<HTMLDivElement | null>
   dataTestId?: string
   editorClassName?: string
+  editorStyle?: CSSProperties
   suggestionListVariant?: 'floating' | 'palette'
   suggestionEmptyLabel?: string
   paletteHeader?: ReactNode
@@ -58,6 +73,36 @@ function collapseSelectionRange(nextSelectionIndex: number) {
   }
 }
 
+function fullSelectionRange(value: string) {
+  return {
+    start: 0,
+    end: value.length,
+  }
+}
+
+function isSelectAllShortcut(event: React.KeyboardEvent<HTMLDivElement>) {
+  return event.key.toLowerCase() === 'a' && (event.metaKey || event.ctrlKey)
+}
+
+function isCommandBackspaceShortcut(event: React.KeyboardEvent<HTMLDivElement>) {
+  return event.key === 'Backspace'
+    && event.metaKey
+    && !event.ctrlKey
+    && !event.altKey
+    && !event.shiftKey
+}
+
+function isLineBreakShortcut(
+  event: React.KeyboardEvent<HTMLDivElement>,
+  isComposing: boolean,
+) {
+  return event.key === 'Enter'
+    && event.shiftKey
+    && !isComposing
+    && !event.nativeEvent.isComposing
+    && event.keyCode !== 229
+}
+
 export const UNSUPPORTED_INLINE_PASTE_MESSAGE = 'Only text paste is supported in the AI composer right now.'
 
 function hasUnsupportedClipboardPayload(clipboardData: DataTransfer) {
@@ -70,6 +115,20 @@ function hasUnsupportedClipboardPayload(clipboardData: DataTransfer) {
 
 function containsUnsupportedInlineContent(editor: HTMLDivElement) {
   return editor.querySelector('img, picture, video, audio, canvas, figure, iframe, object') !== null
+}
+
+function deleteToLineStart(
+  value: string,
+  selection: InlineSelectionRange,
+): { value: string; selection: InlineSelectionRange } | null {
+  const start = Math.max(0, Math.min(selection.start, selection.end, value.length))
+  const end = Math.max(start, Math.min(Math.max(selection.start, selection.end), value.length))
+  if (start !== end) return replaceInlineSelection(value, { start, end }, '')
+
+  const lineStart = start === 0 ? 0 : value.lastIndexOf('\n', start - 1) + 1
+  if (lineStart === start) return null
+
+  return replaceInlineSelection(value, { start: lineStart, end: start }, '')
 }
 
 function submitInlineValue({
@@ -133,6 +192,7 @@ export function InlineWikilinkInput({
   inputRef,
   dataTestId = 'agent-input',
   editorClassName,
+  editorStyle,
   suggestionListVariant = 'floating',
   suggestionEmptyLabel = 'No matching notes',
   paletteHeader,
@@ -140,6 +200,7 @@ export function InlineWikilinkInput({
   paletteFooter,
 }: InlineWikilinkInputProps) {
   const [renderVersion, forceRender] = useState(0)
+  const isComposingRef = useRef(false)
   const segments = useMemo(
     () => buildInlineWikilinkSegments(value, entries),
     [entries, value],
@@ -152,16 +213,23 @@ export function InlineWikilinkInput({
     setSelectionRange,
     setCombinedRef,
     syncSelectionRange,
-    commitValueFromEditor,
     focusSelectionRange,
   } = useInlineWikilinkSelection({
     value,
     onChange,
     inputRef,
+    isComposingRef,
   })
   const pendingPasteRef = useRef<PendingPasteState | null>(null)
-  const isComposingRef = useRef(false)
   const pendingCompositionInputRef = useRef(false)
+  const handledFileDropRef = useRef(false)
+  const pendingFocusAfterRemountRef = useRef<InlineSelectionRange | null>(null)
+  useLayoutEffect(() => {
+    const target = pendingFocusAfterRemountRef.current
+    if (!target) return
+    pendingFocusAfterRemountRef.current = null
+    focusSelectionRange(target)
+  }, [focusSelectionRange, renderVersion])
   const activeQuery = useMemo(
     () => selectionRange.start === selectionRange.end
       ? findActiveWikilinkQuery(value, selectionIndex)
@@ -185,12 +253,34 @@ export function InlineWikilinkInput({
     onSelectionIndexChange: (nextSelectionIndex) => setSelectionRange(collapseSelectionRange(nextSelectionIndex)),
     focusSelectionAt: (nextSelectionIndex) => focusSelectionRange(collapseSelectionRange(nextSelectionIndex)),
   })
-  const insertText = (text: string) => {
-    const nextState = replaceInlineSelection(value, selectionRange, text)
+  const insertTransferText = useCallback((text: string, focusAfterInsert = false) => {
+    const editor = editorRef.current
+    const currentSelectionRange = editor && !focusAfterInsert
+      ? readSelectionRange(editor)
+      : selectionRange
+    const nextState = replaceInlineSelection(value, currentSelectionRange, text)
+    const shouldRestoreFocus = focusAfterInsert || document.activeElement === editor
+
     onChange(nextState.value)
     setSelectionRange(nextState.selection)
+    pendingFocusAfterRemountRef.current = shouldRestoreFocus ? nextState.selection : null
+    forceRender((current) => current + 1)
+  }, [editorRef, onChange, selectionRange, setSelectionRange, value])
+  const insertNativePathDrop = (paths: string[]) => {
+    const droppedPathText = formatDroppedPathList(paths)
+    if (!droppedPathText) return
+
+    insertTransferText(droppedPathText, true)
   }
-  const notifyUnsupportedPaste = () => onUnsupportedPaste?.(UNSUPPORTED_INLINE_PASTE_MESSAGE)
+  useNativePathDrop({
+    targetRef: editorRef,
+    disabled,
+    onPathDrop: insertNativePathDrop,
+  })
+  const notifyUnsupportedPaste = useCallback(
+    () => onUnsupportedPaste?.(UNSUPPORTED_INLINE_PASTE_MESSAGE),
+    [onUnsupportedPaste],
+  )
   const recoverUnsupportedMutation = () => {
     pendingCompositionInputRef.current = false
     pendingPasteRef.current = null
@@ -204,17 +294,108 @@ export function InlineWikilinkInput({
     onChange(nextState.value)
     setSelectionRange(nextState.selection)
   }
-  const handleBeforeInput = (event: React.FormEvent<HTMLDivElement>) => {
+  const deleteContentToLineStart = (event: React.KeyboardEvent<HTMLDivElement>) => {
+    if (!isCommandBackspaceShortcut(event)) return false
+    if (isComposingRef.current || event.nativeEvent.isComposing || event.keyCode === 229) return false
+
+    const editor = editorRef.current
+    const currentSelectionRange = editor ? readSelectionRange(editor) : selectionRange
+    const nextState = deleteToLineStart(value, currentSelectionRange)
+
+    event.preventDefault()
+    event.stopPropagation()
+
+    if (!nextState) return true
+
+    onChange(nextState.value)
+    setSelectionRange(nextState.selection)
+    pendingFocusAfterRemountRef.current = nextState.selection
+    forceRender((current) => current + 1)
+    return true
+  }
+  const selectAllContent = () => {
+    const nextSelection = fullSelectionRange(value)
+    setSelectionRange(nextSelection)
+    focusSelectionRange(nextSelection)
+  }
+  const cutSelectedContent = (event: React.ClipboardEvent<HTMLDivElement>) => {
     if (disabled) return
 
-    const nativeEvent = event.nativeEvent as InputEvent
-    if (!nativeEvent.inputType.startsWith('insert')) return
+    const editor = editorRef.current
+    const currentSelectionRange = editor ? readSelectionRange(editor) : selectionRange
+    const selectedText = selectedInlineText(value, currentSelectionRange)
+    if (!selectedText) return
+
+    event.preventDefault()
+    event.clipboardData.setData('text/plain', normalizeInlineWikilinkValue(selectedText))
+
+    const nextState = deleteInlineSelection(value, currentSelectionRange, segments, 'backward')
+    if (!nextState) return
+
+    onChange(nextState.value)
+    setSelectionRange(nextState.selection)
+    pendingFocusAfterRemountRef.current = nextState.selection
+    forceRender((current) => current + 1)
+  }
+  const handleBeforeInput = useCallback((nativeEvent: InputEvent) => {
+    if (disabled) return
+
+    if (!isInsertBeforeInput(nativeEvent)) return
+
+    if (nativeEvent.inputType === 'insertLineBreak') {
+      nativeEvent.preventDefault()
+      insertTransferText('\n')
+      return
+    }
+
+    if (isPlainTextBeforeInput(nativeEvent)) {
+      nativeEvent.preventDefault()
+      insertTransferText(nativeEvent.data)
+      return
+    }
 
     const dataTransfer = nativeEvent.dataTransfer
     if (!dataTransfer || !hasUnsupportedClipboardPayload(dataTransfer)) return
 
-    event.preventDefault()
+    if (nativeEvent.inputType === 'insertFromDrop' && handledFileDropRef.current) {
+      handledFileDropRef.current = false
+      nativeEvent.preventDefault()
+      return
+    }
+
+    if (nativeEvent.inputType === 'insertFromDrop') {
+      const droppedPathText = extractDroppedPathText(dataTransfer)
+      if (droppedPathText) {
+        nativeEvent.preventDefault()
+        insertTransferText(droppedPathText)
+        return
+      }
+    }
+
+    nativeEvent.preventDefault()
     notifyUnsupportedPaste()
+  }, [disabled, insertTransferText, notifyUnsupportedPaste])
+  useLayoutEffect(() => {
+    const editor = editorRef.current
+    if (!editor) return
+
+    editor.addEventListener('beforeinput', handleBeforeInput as EventListener)
+    return () => editor.removeEventListener('beforeinput', handleBeforeInput as EventListener)
+  }, [editorRef, handleBeforeInput, renderVersion])
+  const handleDrop = (event: React.DragEvent<HTMLDivElement>) => {
+    if (disabled) return
+    if (!hasUnsupportedClipboardPayload(event.dataTransfer)) return
+
+    handledFileDropRef.current = true
+    const droppedPathText = extractDroppedPathText(event.dataTransfer)
+    event.preventDefault()
+
+    if (!droppedPathText) {
+      notifyUnsupportedPaste()
+      return
+    }
+
+    insertTransferText(droppedPathText)
   }
   const handlePaste = (event: React.ClipboardEvent<HTMLDivElement>) => {
     if (disabled) return
@@ -255,12 +436,45 @@ export function InlineWikilinkInput({
       }
     }
 
-    commitValueFromEditor()
+    if (!editor) return
+
+    const nextValue = normalizeInlineWikilinkValue(serializeInlineNode(editor))
+    const nextSelection = readSelectionRange(editor)
+    const clampedSelection: InlineSelectionRange = {
+      start: Math.min(nextSelection.start, nextValue.length),
+      end: Math.min(nextSelection.end, nextValue.length),
+    }
+
+    const shouldRestoreFocus = document.activeElement === editor
+    pendingFocusAfterRemountRef.current = shouldRestoreFocus ? clampedSelection : null
+    onChange(nextValue)
+    setSelectionRange(clampedSelection)
+    forceRender((current) => current + 1)
   }
   const flushPendingCompositionInput = () => {
     if (isComposingRef.current || !pendingCompositionInputRef.current) return
     pendingCompositionInputRef.current = false
-    syncValueFromEditor()
+
+    const editor = editorRef.current
+    if (!editor) return
+
+    if (containsUnsupportedInlineContent(editor)) {
+      recoverUnsupportedMutation()
+      return
+    }
+
+    const nextValue = normalizeInlineWikilinkValue(serializeInlineNode(editor))
+    const nextSelection = readSelectionRange(editor)
+    const clampedSelection: InlineSelectionRange = {
+      start: Math.min(nextSelection.start, nextValue.length),
+      end: Math.min(nextSelection.end, nextValue.length),
+    }
+
+    const shouldRestoreFocus = document.activeElement === editor
+    pendingFocusAfterRemountRef.current = shouldRestoreFocus ? clampedSelection : null
+    onChange(nextValue)
+    setSelectionRange(clampedSelection)
+    forceRender((current) => current + 1)
   }
   const handleCompositionStart = () => {
     isComposingRef.current = true
@@ -270,6 +484,8 @@ export function InlineWikilinkInput({
     queueMicrotask(flushPendingCompositionInput)
   }
   const handleInput = () => {
+    if (disabled) return
+
     if (isComposingRef.current) {
       pendingCompositionInputRef.current = true
       return
@@ -280,7 +496,23 @@ export function InlineWikilinkInput({
   }
   const submitValue = () =>
     submitInlineValue({ onSubmit, submitOnEmpty, value, references })
-  const handleKeyDown = (event: React.KeyboardEvent<HTMLDivElement>) =>
+  const handleKeyDown = (event: React.KeyboardEvent<HTMLDivElement>) => {
+    if (!disabled && isLineBreakShortcut(event, isComposingRef.current)) {
+      event.preventDefault()
+      insertTransferText('\n')
+      return
+    }
+
+    if (isSelectAllShortcut(event)) {
+      event.preventDefault()
+      selectAllContent()
+      return
+    }
+
+    if (!disabled && deleteContentToLineStart(event)) {
+      return
+    }
+
     handleInlineWikilinkKeyDown({
       event,
       disabled,
@@ -289,10 +521,10 @@ export function InlineWikilinkInput({
       onCycleSuggestions: cycleSuggestions,
       onSelectSuggestion: () => selectSuggestion(selectedSuggestionIndex),
       onDeleteContent: deleteContent,
-      onInsertText: insertText,
       canSubmit: onSubmit !== undefined,
       onSubmit: submitValue,
     })
+  }
   const editor = (
     <InlineWikilinkEditorField
       key={renderVersion}
@@ -302,11 +534,13 @@ export function InlineWikilinkInput({
       inputRef={setCombinedRef}
       dataTestId={dataTestId}
       editorClassName={editorClassName}
-      onBeforeInput={handleBeforeInput}
+      editorStyle={editorStyle}
       onCompositionEnd={handleCompositionEnd}
       onCompositionStart={handleCompositionStart}
       onInput={handleInput}
       onKeyDown={handleKeyDown}
+      onCut={cutSelectedContent}
+      onDrop={handleDrop}
       onPaste={handlePaste}
       onSelectionChange={syncSelectionRange}
       segments={segments}

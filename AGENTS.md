@@ -22,7 +22,7 @@ Run `/laputa-next-task` — fetches next task (To Rework first, then Open), move
 - Work on `main` branch — **no branches, no PRs, ever**. Pre-commit and pre-push block work from any other branch.
 - Commit every 20–30 min: `feat:`, `fix:`, `refactor:`, `test:`, `docs:`
 - **⛔ NEVER use --no-verify**
-- For UI tasks: open `ui-design.pen` first, study visual language, design in light mode
+- For UI tasks: open `ui-design.pen` first, study visual language, design in light mode. You don't need Pencil to use it – you can open it as a JSON file.
 
 ### 1c. When done
 
@@ -47,15 +47,17 @@ bash ~/.openclaw/skills/tolaria-qa/scripts/screenshot.sh /tmp/qa-native.png
 
 Use `osascript` for keyboard interactions. Write result as Todoist comment (✅ or ❌). **⚠️ WKWebView:** `osascript keystroke` blocked inside editor — rely on Playwright for text input features.
 
-After both phases pass, add a **completion comment** to the Todoist task before running `/laputa-done`. The comment must include:
-- What was implemented (1–2 lines)
+After both phases pass, add a **completion comment** to the Todoist task. The comment must include:
+- What was implemented (a few lines covering logic and UX/UI)
 - QA: what was tested and how (Playwright / native screenshot / osascript)
+- Tests/coverage: commands run and final coverage result
+- CodeScene: before/after touched-file checks plus final Hotspot and Average scores after push
+- Codacy: MCP/CLI scan summary; confirm no new Critical/High findings
+- Localization: `pnpm l10n:translate` + `pnpm l10n:validate` result, or "no UI copy changes"
+- PostHog: event name(s) added, or why no event was needed
 - Refactoring: any files refactored to meet the CodeScene gate (or "none needed")
 - ADRs: any new/updated ADRs (or "none")
 - Docs: any updated docs (ARCHITECTURE.md, ABSTRACTIONS.md, etc.) (or "none")
-- Code health: final Hotspot and Average scores after push
-
-Then run `/laputa-done <task_id>` → moves to In Review, notifies Brian, self-dispatches next task.
 
 ---
 
@@ -73,9 +75,27 @@ Red → Green → Refactor → Commit. One cycle per commit. For bugs: write fai
 
 **Test quality (Kent Beck's Desiderata):** Isolated · Deterministic · Fast · Behavioral · Structure-insensitive · Specific · Predictive. Fix flaky tests first. Prefer E2E over unit tests for user flows.
 
+### Localization (mandatory for UI copy)
+
+All user-facing UI labels/copy must live in `src/lib/locales/en.json` and be translated into every target listed in `lara.yaml`. When adding or changing interface copy:
+
+```bash
+pnpm l10n:translate
+```
+
+Use `pnpm l10n:translate:force` only when intentionally regenerating existing translations. Commit `src/lib/locales/*.json`, `lara.yaml`/`lara.lock` changes if produced, and verify placeholders/product names stayed intact.
+
+### Product analytics (mandatory for meaningful features)
+
+New features should almost always emit a PostHog event so we can see whether users actually discover and use them. Skip instrumentation only for very small changes where a dedicated event would create noise. Use clear, stable event names, avoid PII or note content, and include only safe metadata that helps evaluate adoption and failures.
+
+When adding or changing a meaningful user-facing feature, include the event name(s) in the Todoist completion comment alongside QA, docs, and code health. If intentionally not instrumenting a feature, explain why in the completion comment.
+
 ### Code health (mandatory)
 
 Pre-commit and pre-push hooks enforce **Hotspot Code Health** and **Average Code Health** ≥ thresholds in `.codescene-thresholds`. Both gates block commit/push. Thresholds are a **ratchet** — only go up. When pre-push sees improved remote scores, it updates `.codescene-thresholds`, stages it, and stops so you can commit the new floor with normal verified hooks before pushing again. Never add `// eslint-disable`, `#[allow(...)]`, or `as any`.
+
+**Release rule:** CodeScene is a before/after gate, not just a final score. Every task must record the starting CodeScene state before edits and the final state after edits. If touched code gets worse, refactor before committing.
 
 **⛔ NEVER edit `.codescene-thresholds` to lower the values.** If the gate blocks you, improve the code — do not lower the bar.
 
@@ -89,11 +109,39 @@ Pre-commit and pre-push hooks enforce **Hotspot Code Health** and **Average Code
 
 **If CodeScene gate blocks your push:** use `mcp__codescene__code_health_score` to find the worst file, refactor it, commit, push again. Do NOT stop or wait for laputa-refactor — that is a background loop, not a substitute for fixing your own regressions.
 
+### Security scan with Codacy (mandatory)
+
+Use Codacy as a security and static-analysis gate before a task is considered releasable.
+
+- Prefer the Codacy MCP inside Codex to inspect repository/file issues for every touched code file.
+- If MCP is unavailable, use the local CLI wrapper, e.g. `.codacy/cli.sh analyze <path> --format sarif`; choose the relevant tool when useful (`eslint`, `opengrep`, `trivy`, `lizard`).
+- **Always fix Critical and High severity findings introduced by your change.** Do not move the task to In Review with new Critical/High Codacy issues.
+- Review Medium findings. Fix them when they are real defects or security-sensitive; otherwise explain why they are acceptable in the completion comment.
+- Never silence a Codacy rule just to pass the scan. Prefer small code changes that remove the finding.
+
 ### Check suite (runs on every push)
 ```bash
 pnpm lint && npx tsc --noEmit && pnpm test && pnpm test:coverage  # frontend ≥70%
 cargo test && cargo llvm-cov --manifest-path src-tauri/Cargo.toml --no-clean --fail-under-lines 85
 ```
+
+Coverage is a release gate, not a vanity metric:
+- Frontend coverage must stay ≥70%.
+- Rust line coverage must stay ≥85%.
+- For bug fixes, add a regression test when practical.
+- For new behavior, add targeted coverage close to the changed code; do not rely only on broad E2E coverage.
+
+### Release-readiness checklist
+
+Before pushing or moving a task to In Review, verify and mention the result in the Todoist completion comment:
+
+- CodeScene before/after checked for every touched/new scorable file; final Hotspot and Average pass `.codescene-thresholds`.
+- Coverage commands passed (`pnpm test:coverage` and `cargo llvm-cov ... --fail-under-lines 85`) or the change is docs-only.
+- Codacy checked via MCP or `.codacy/cli.sh`; all new Critical/High issues fixed.
+- Localization checked: any user-facing copy lives in `src/lib/locales/en.json`, `pnpm l10n:translate` was run, and `pnpm l10n:validate` passes. If no copy changed, say “Localization: no UI copy changes”.
+- PostHog checked: meaningful new user actions/events are instrumented with safe metadata; noisy/minor changes explicitly say “PostHog: no event needed because …”.
+- Docs/ADRs checked under the rules below.
+- Demo vault dirt checked: `git status --short -- demo-vault demo-vault-v2` is empty unless fixture changes are intentional.
 
 ### ADRs & docs
 
@@ -121,10 +169,6 @@ Default to `demo-vault-v2/`. If you must use `~/Laputa/` for testing:
 - **Never commit or push** any test notes to the remote vault
 - **Delete all test notes from disk** when done — do not leave untitled or temporary notes on the filesystem. Run `cd ~/Laputa && git checkout -- . && git clean -fd` to restore the vault to its last committed state.
 - **Rationale:** test notes pollute the local vault over time, making it a collection of nonsensical untitled files. The vault must stay clean on disk, not just on the remote.
-
-### UI design
-
-Open `ui-design.pen` first (light mode). Create `design/<slug>.pen` for the task; on completion merge into `ui-design.pen` and delete it.
 
 ### UI components — mandatory rules
 
@@ -155,10 +199,11 @@ Open `ui-design.pen` first (light mode). Create `design/<slug>.pen` for the task
 - Tauri menu accelerators: `MenuItemBuilder::new(label).accelerator("CmdOrCtrl+1")`
 - `app.set_menu()` replaces the ENTIRE menu bar — include all submenus
 - `mock-tauri.ts` silently swallows Tauri calls — not a substitute for native testing
+
 ### QA scripts
 
 ```bash
-bash ~/.openclaw/skills/tolaria-qa/scripts/focus-app.sh laputa
+bash ~/.openclaw/skills/tolaria-qa/scripts/focus-app.sh Tolaria
 bash ~/.openclaw/skills/tolaria-qa/scripts/screenshot.sh /tmp/out.png
 bash ~/.openclaw/skills/tolaria-qa/scripts/shortcut.sh "command" "s"
 ```

@@ -1,7 +1,6 @@
 import { useState, useRef, useCallback, useMemo } from 'react'
 import { createPortal } from 'react-dom'
 import { getTagStyle, setTagColor, getTagColorKey } from '../utils/tagStyles'
-import { ACCENT_COLORS } from '../utils/typeColors'
 import {
   getNextHighlightIndex,
   getPreviousHighlightIndex,
@@ -9,9 +8,9 @@ import {
   useAnchoredDropdownPosition,
   useAutoFocus,
 } from './propertyDropdownUtils'
+import { AccentColorPicker } from './AccentColorPicker'
 
 const PROPERTY_DROPDOWN_WIDTH = 208
-const SELECTED_SWATCH_CHECK_STYLE = { color: 'var(--text-inverse)', fontSize: 8, lineHeight: 1 } as const
 
 export function TagPill({ tag, className }: { tag: string; className?: string }) {
   const style = getTagStyle(tag)
@@ -40,20 +39,15 @@ function ColorPickerRow({ tag, onColorChange }: { tag: string; onColorChange: (t
   const currentKey = getTagColorKey(tag)
   return (
     <div className="flex items-center gap-1 px-3 py-1.5" data-testid={`tag-color-picker-${tag}`}>
-      {ACCENT_COLORS.map(c => (
-        <button
-          key={c.key}
-          className="flex size-4 shrink-0 items-center justify-center rounded-full border-none p-0 transition-transform hover:scale-125"
-          style={{ backgroundColor: c.css }}
-          onClick={(e) => { e.stopPropagation(); onColorChange(tag, c.key) }}
-          title={c.label}
-          data-testid={`tag-color-option-${c.key}`}
-        >
-          {currentKey === c.key && (
-            <span style={SELECTED_SWATCH_CHECK_STYLE}>{'\u2713'}</span>
-          )}
-        </button>
-      ))}
+      <AccentColorPicker
+        className="gap-1"
+        getOptionTestId={(key) => `tag-color-option-${key}`}
+        indicator="check"
+        selectedColor={currentKey}
+        onSelectColor={(colorKey) => onColorChange(tag, colorKey)}
+        size={16}
+        stopPropagation
+      />
     </div>
   )
 }
@@ -137,7 +131,7 @@ function getTagValueToToggle({
   selectedTags,
 }: TagSelectionOptions) {
   const trimmed = query.trim()
-  if (highlightIndex >= 0 && highlightIndex < filtered.length) return filtered[highlightIndex]
+  if (highlightIndex >= 0 && highlightIndex < filtered.length) return filtered.at(highlightIndex)
   if (showCreateOption && highlightIndex === filtered.length && trimmed) return trimmed
   if (trimmed && !selectedTags.has(trimmed)) return trimmed
   return null
@@ -156,7 +150,7 @@ function useTagKeyboard(opts: {
     const list = listRef.current
     if (!list) return
     const items = list.querySelectorAll('[data-testid^="tag-option-"], [data-testid="tag-create-option"]')
-    items[index]?.scrollIntoView({ block: 'nearest' })
+    items.item(index)?.scrollIntoView({ block: 'nearest' })
   }, [listRef])
 
   const moveHighlight = useCallback((nextIndex: number) => {

@@ -1,6 +1,5 @@
+import { ArrowUpRight, Bug, Chats as MessagesSquare, Check, Copy, GitPullRequest, Lightbulb, Megaphone, Newspaper } from '@phosphor-icons/react'
 import { type ReactNode, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
-import { Megaphone } from '@phosphor-icons/react'
-import { ArrowUpRight, Bug, Check, Copy, GitPullRequest, Lightbulb, MessagesSquare, Newspaper } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import {
   Card,
@@ -163,7 +162,7 @@ function ContributionLinkButton({
       className={cn(
         'w-full justify-between',
         accented && 'bg-background text-foreground hover:text-foreground',
-        accented && CONTRIBUTION_BUTTON_CLASSES[tone],
+        accented && Reflect.get(CONTRIBUTION_BUTTON_CLASSES, tone),
       )}
       autoFocus={autoFocus}
       onClick={onAction}
@@ -188,7 +187,7 @@ function ContributionCard({
     <Card className="gap-4 border-border/70 py-4 shadow-none">
       <CardHeader className="gap-3 px-4">
         <div className="flex items-center gap-2 text-sm font-medium text-foreground">
-          <span className={cn('rounded-md p-2', CONTRIBUTION_TONE_CLASSES[tone])}>
+          <span className={cn('rounded-md p-2', Reflect.get(CONTRIBUTION_TONE_CLASSES, tone))}>
             <Icon size={16} />
           </span>
           <CardTitle className="text-sm font-semibold">{title}</CardTitle>

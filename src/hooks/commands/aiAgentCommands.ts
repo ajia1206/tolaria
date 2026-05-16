@@ -11,7 +11,20 @@ import {
 } from '../../lib/vaultAiGuidance'
 import type { CommandAction } from './types'
 
+const AI_AGENT_KEYWORDS = Array.from(new Set(
+  AI_AGENT_DEFINITIONS.flatMap((definition) => [
+    definition.id,
+    definition.shortLabel.toLowerCase(),
+    definition.label.toLowerCase(),
+  ]),
+))
+
+function aiAgentKeywords(...keywords: string[]): string[] {
+  return [...keywords, ...AI_AGENT_KEYWORDS]
+}
+
 interface AiAgentCommandsConfig {
+  aiFeaturesEnabled?: boolean
   aiAgentsStatus?: AiAgentsStatus
   vaultAiGuidanceStatus?: VaultAiGuidanceStatus
   selectedAiAgent?: AiAgentId
@@ -36,7 +49,7 @@ function explicitSwitchCommands({
       id: `switch-ai-agent-${definition.id}`,
       label: `Switch AI Agent to ${definition.label}`,
       group: 'Settings' as const,
-      keywords: ['ai', 'agent', 'default', 'switch', 'claude', 'codex', definition.shortLabel.toLowerCase()],
+      keywords: aiAgentKeywords('ai', 'agent', 'default', 'switch'),
       enabled: true,
       execute: () => onSetDefaultAiAgent(definition.id),
     }))
@@ -55,7 +68,7 @@ function restoreGuidanceCommands({
       id: 'restore-vault-ai-guidance',
       label: 'Restore Tolaria AI Guidance',
       group: 'Settings',
-      keywords: ['ai', 'agent', 'guidance', 'restore', 'repair', 'claude', 'codex', 'agents'],
+      keywords: aiAgentKeywords('ai', 'agent', 'guidance', 'restore', 'repair', 'agents', 'gemini'),
       enabled: true,
       execute: () => onRestoreVaultAiGuidance(),
     },
@@ -63,6 +76,7 @@ function restoreGuidanceCommands({
 }
 
 export function buildAiAgentCommands({
+  aiFeaturesEnabled = true,
   aiAgentsStatus,
   vaultAiGuidanceStatus,
   selectedAiAgent,
@@ -72,12 +86,14 @@ export function buildAiAgentCommands({
   onCycleDefaultAiAgent,
   onSetDefaultAiAgent,
 }: AiAgentCommandsConfig): CommandAction[] {
+  if (!aiFeaturesEnabled) return []
+
   const commands: CommandAction[] = [
     {
       id: 'open-ai-agents',
       label: 'Open AI Agents',
       group: 'Settings',
-      keywords: ['ai', 'agent', 'agents', 'assistant', 'claude', 'codex', 'settings'],
+      keywords: aiAgentKeywords('ai', 'agent', 'agents', 'assistant', 'settings'),
       enabled: !!onOpenAiAgents,
       execute: () => onOpenAiAgents?.(),
     },
@@ -101,7 +117,7 @@ export function buildAiAgentCommands({
     id: 'switch-default-ai-agent',
     label: selectedAiAgentLabel ? `Switch Default AI Agent (${selectedAiAgentLabel})` : 'Switch Default AI Agent',
     group: 'Settings',
-    keywords: ['ai', 'agent', 'default', 'switch', 'claude', 'codex'],
+    keywords: aiAgentKeywords('ai', 'agent', 'default', 'switch'),
     enabled: !!onCycleDefaultAiAgent,
     execute: () => onCycleDefaultAiAgent?.(),
   })

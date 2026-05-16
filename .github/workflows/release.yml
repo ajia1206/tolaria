@@ -4,10 +4,18 @@ on:
   push:
     branches:
       - main
+    paths-ignore:
+      - ".husky/**"
+      - ".github/workflows/deploy-docs.yml"
+      - ".github/workflows/release.yml"
+      - "site/**"
 
 env:
   # Bump this when Tauri/Rust target artifacts capture stale absolute paths.
   RUST_TARGET_CACHE_VERSION: v2026-04-14-tolaria
+  # The production Vite bundle can exceed Node's default ~2GB heap on
+  # macOS arm64 runners while Tauri runs beforeBuildCommand.
+  NODE_OPTIONS: --max-old-space-size=4096
 
 concurrency:
   group: release-alpha-${{ github.ref }}
@@ -69,10 +77,18 @@ jobs:
           else:
               today = datetime.now(timezone.utc).date()
               stable_date = None
-              stable_pattern = re.compile(r"^stable-v(\d{4})\.(\d{1,2})\.(\d{1,2})$")
+              stable_patterns = (
+                  re.compile(r"^v(\d{4})-(\d{2})-(\d{2})$"),
+                  re.compile(r"^stable-v(\d{4})\.(\d{1,2})\.(\d{1,2})$"),
+              )
 
-              for stable_tag in lines(["git", "tag", "--list", "stable-v*", "--sort=-version:refname"]):
-                  match = stable_pattern.fullmatch(stable_tag)
+              stable_tags = lines([
+                  "git", "for-each-ref", "--sort=-creatordate", "--format=%(refname:short)",
+                  "refs/tags/v20*", "refs/tags/stable-v*",
+              ])
+
+              for stable_tag in stable_tags:
+                  match = next((pattern.fullmatch(stable_tag) for pattern in stable_patterns if pattern.fullmatch(stable_tag)), None)
                   if not match:
                       continue
 
@@ -121,11 +137,13 @@ jobs:
         include:
           - arch: aarch64
             target: aarch64-apple-darwin
+          - arch: x86_64
+            target: x86_64-apple-darwin
     steps:
       - uses: actions/checkout@v4
 
       - name: Setup pnpm
-        uses: pnpm/action-setup@v4
+        uses: pnpm/action-setup@f40ffcd9367d9f12939873eb1018b921a783ffaa
         with:
           version: 10
 
@@ -136,12 +154,12 @@ jobs:
           cache: 'pnpm'
 
       - name: Setup Bun (required for bundle-qmd.sh)
-        uses: oven-sh/setup-bun@v2
+        uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6
         with:
           bun-version: latest
 
       - name: Setup Rust
-        uses: dtolnay/rust-toolchain@stable
+        uses: dtolnay/rust-toolchain@29eef336d9b2848a0b548edc03f92a220660cdb8
         with:
           targets: ${{ matrix.target }}
 
@@ -286,6 +304,7 @@ jobs:
           APPLE_PASSWORD: ${{ secrets.APPLE_PASSWORD }}
           APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
           VITE_SENTRY_DSN: ${{ secrets.VITE_SENTRY_DSN }}
+          VITE_SENTRY_RELEASE: ${{ needs.version.outputs.version }}
           SENTRY_DSN: ${{ secrets.SENTRY_DSN }}
           VITE_POSTHOG_KEY: ${{ secrets.VITE_POSTHOG_KEY }}
           VITE_POSTHOG_HOST: ${{ secrets.VITE_POSTHOG_HOST }}
@@ -320,15 +339,18 @@ jobs:
             libxdo-dev \
             libssl-dev \
             libayatana-appindicator3-dev \
+            fcitx5-frontend-gtk3 \
+            libfuse2 \
             librsvg2-dev \
             curl \
             wget \
             patchelf \
             build-essential \
-            file
+            file \
+            rpm
 
       - name: Setup pnpm
-        uses: pnpm/action-setup@v4
+        uses: pnpm/action-setup@f40ffcd9367d9f12939873eb1018b921a783ffaa
         with:
           version: 10
 
@@ -339,7 +361,7 @@ jobs:
           cache: 'pnpm'
 
       - name: Setup Rust
-        uses: dtolnay/rust-toolchain@stable
+        uses: dtolnay/rust-toolchain@29eef336d9b2848a0b548edc03f92a220660cdb8
         with:
           targets: x86_64-unknown-linux-gnu
 
@@ -369,29 +391,39 @@ jobs:
 
       - name: Build Tauri app (Linux bundles)
         env:
+          APPIMAGE_EXTRACT_AND_RUN: 1
           TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
           TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_KEY_PASSWORD }}
           VITE_SENTRY_DSN: ${{ secrets.VITE_SENTRY_DSN }}
+          VITE_SENTRY_RELEASE: ${{ needs.version.outputs.version }}
           SENTRY_DSN: ${{ secrets.SENTRY_DSN }}
           VITE_POSTHOG_KEY: ${{ secrets.VITE_POSTHOG_KEY }}
           VITE_POSTHOG_HOST: ${{ secrets.VITE_POSTHOG_HOST }}
         run: |
-          pnpm tauri build --target x86_64-unknown-linux-gnu --bundles deb,appimage
+          pnpm tauri build --target x86_64-unknown-linux-gnu --bundles deb,rpm,appimage
 
       - name: Validate Linux bundles
         run: |
           shopt -s nullglob
-          installers=(
+          appimages=(
             src-tauri/target/x86_64-unknown-linux-gnu/release/bundle/appimage/*.AppImage
+          )
+          installers=(
+            "${appimages[@]}"
             src-tauri/target/x86_64-unknown-linux-gnu/release/bundle/deb/*.deb
+            src-tauri/target/x86_64-unknown-linux-gnu/release/bundle/rpm/*.rpm
           )
           signatures=(
             src-tauri/target/x86_64-unknown-linux-gnu/release/bundle/appimage/*.AppImage.sig
             src-tauri/target/x86_64-unknown-linux-gnu/release/bundle/appimage/*.AppImage.tar.gz.sig
             src-tauri/target/x86_64-unknown-linux-gnu/release/bundle/deb/*.deb.sig
           )
+          if [ ${#appimages[@]} -eq 0 ]; then
+            echo "::error::Linux build produced no AppImage bundle."
+            exit 1
+          fi
           if [ ${#installers[@]} -eq 0 ]; then
-            echo "::error::Linux build produced no AppImage or deb bundle."
+            echo "::error::Linux build produced no AppImage, deb or rpm bundle."
             exit 1
           fi
           if [ ${#signatures[@]} -eq 0 ]; then
@@ -406,6 +438,7 @@ jobs:
           path: |
             src-tauri/target/x86_64-unknown-linux-gnu/release/bundle/deb/*.deb
             src-tauri/target/x86_64-unknown-linux-gnu/release/bundle/deb/*.deb.sig
+            src-tauri/target/x86_64-unknown-linux-gnu/release/bundle/rpm/*.rpm
             src-tauri/target/x86_64-unknown-linux-gnu/release/bundle/appimage/*.AppImage
             src-tauri/target/x86_64-unknown-linux-gnu/release/bundle/appimage/*.AppImage.sig
             src-tauri/target/x86_64-unknown-linux-gnu/release/bundle/appimage/*.AppImage.tar.gz
@@ -422,7 +455,7 @@ jobs:
       - uses: actions/checkout@v4
 
       - name: Setup pnpm
-        uses: pnpm/action-setup@v4
+        uses: pnpm/action-setup@f40ffcd9367d9f12939873eb1018b921a783ffaa
         with:
           version: 10
 
@@ -433,7 +466,7 @@ jobs:
           cache: 'pnpm'
 
       - name: Setup Rust
-        uses: dtolnay/rust-toolchain@stable
+        uses: dtolnay/rust-toolchain@29eef336d9b2848a0b548edc03f92a220660cdb8
         with:
           targets: x86_64-pc-windows-msvc
 
@@ -447,6 +480,16 @@ jobs:
           key: ${{ runner.os }}-release-cargo-x86_64-pc-windows-msvc-${{ env.RUST_TARGET_CACHE_VERSION }}-${{ hashFiles('src-tauri/Cargo.lock') }}
           restore-keys: |
             ${{ runner.os }}-release-cargo-x86_64-pc-windows-msvc-${{ env.RUST_TARGET_CACHE_VERSION }}-
+
+      - name: Cache Tauri Windows tools
+        uses: actions/cache@v4
+        with:
+          path: ~\AppData\Local\tauri
+          key: ${{ runner.os }}-tauri-tools-nsis-3.11-nsis-tauri-utils-0.5.3
+
+      - name: Prefetch Tauri NSIS toolchain
+        shell: pwsh
+        run: ./.github/scripts/prefetch-tauri-nsis.ps1
 
       - name: Install frontend dependencies
         run: pnpm install --frozen-lockfile
@@ -483,6 +526,7 @@ jobs:
           TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
           TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_KEY_PASSWORD }}
           VITE_SENTRY_DSN: ${{ secrets.VITE_SENTRY_DSN }}
+          VITE_SENTRY_RELEASE: ${{ needs.version.outputs.version }}
           SENTRY_DSN: ${{ secrets.SENTRY_DSN }}
           VITE_POSTHOG_KEY: ${{ secrets.VITE_POSTHOG_KEY }}
           VITE_POSTHOG_HOST: ${{ secrets.VITE_POSTHOG_HOST }}
@@ -543,6 +587,7 @@ jobs:
     runs-on: ubuntu-latest
     permissions:
       contents: write
+      pages: write
     steps:
       - uses: actions/checkout@v4
         with:
@@ -550,6 +595,37 @@ jobs:
 
       - name: Download all artifacts
         uses: actions/download-artifact@v4
+
+      - name: Normalize macOS updater artifact names
+        run: |
+          normalize_updater() {
+            local arch="$1"
+            local normalized_updater="$2"
+            local artifact_dir="updater-${arch}"
+            local updater_file
+            updater_file=$(find "$artifact_dir" -maxdepth 1 -name "*.app.tar.gz" -print -quit)
+            if [ -z "$updater_file" ]; then
+              echo "::error::Missing macOS updater artifact in ${artifact_dir}" >&2
+              return 1
+            fi
+
+            local sig_file="${updater_file}.sig"
+            if [ ! -f "$sig_file" ]; then
+              echo "::error::Missing macOS updater signature for ${updater_file}" >&2
+              return 1
+            fi
+
+            local normalized_sig="${normalized_updater}.sig"
+            if [ "$updater_file" != "$normalized_updater" ]; then
+              mv "$updater_file" "$normalized_updater"
+            fi
+            if [ "$sig_file" != "$normalized_sig" ]; then
+              mv "$sig_file" "$normalized_sig"
+            fi
+          }
+
+          normalize_updater aarch64 "updater-aarch64/Tolaria_${{ needs.version.outputs.version }}_macOS_Silicon.app.tar.gz"
+          normalize_updater x86_64 "updater-x86_64/Tolaria_${{ needs.version.outputs.version }}_macOS_Intel.app.tar.gz"
 
       - name: Generate release notes
         run: |
@@ -587,7 +663,7 @@ jobs:
             echo "---"
             echo "**Alpha build — updated on every push to \`main\`**"
             echo ""
-            echo "**Includes macOS (Apple Silicon), Linux x64, and Windows x64 bundles**"
+            echo "**Includes macOS (Apple Silicon and Intel), Linux x64, and Windows x64 bundles**"
             echo ""
             echo "*Built from \`$(git rev-parse --short HEAD)\` on $(date -u +%Y-%m-%d)*"
           } > release_notes.md
@@ -616,6 +692,11 @@ jobs:
           ARM_SIG=$(cat "$ARM_SIG_FILE")
           ARM_UPDATER=$(basename "$ARM_UPDATER_FILE")
 
+          INTEL_SIG_FILE=$(find_required "updater-x86_64/*.app.tar.gz.sig")
+          INTEL_UPDATER_FILE="${INTEL_SIG_FILE%.sig}"
+          INTEL_SIG=$(cat "$INTEL_SIG_FILE")
+          INTEL_UPDATER=$(basename "$INTEL_UPDATER_FILE")
+
           LINUX_SIG_FILE=$(find_required "linux-x86_64-bundles/*/*.AppImage.sig" "linux-x86_64-bundles/*/*.AppImage.tar.gz.sig" "linux-x86_64-bundles/*/*.deb.sig" "linux-x86_64-bundles/*.AppImage.sig" "linux-x86_64-bundles/*.AppImage.tar.gz.sig" "linux-x86_64-bundles/*.deb.sig")
           LINUX_UPDATER_FILE="${LINUX_SIG_FILE%.sig}"
           LINUX_SIG=$(cat "$LINUX_SIG_FILE")
@@ -639,6 +720,11 @@ jobs:
                 "url": "https://github.com/${REPO}/releases/download/${TAG}/${ARM_UPDATER}",
                 "download_url": "https://github.com/${REPO}/releases/download/${TAG}/${ARM_UPDATER}"
               },
+              "darwin-x86_64": {
+                "signature": "${INTEL_SIG}",
+                "url": "https://github.com/${REPO}/releases/download/${TAG}/${INTEL_UPDATER}",
+                "download_url": "https://github.com/${REPO}/releases/download/${TAG}/${INTEL_UPDATER}"
+              },
               "linux-x86_64": {
                 "signature": "${LINUX_SIG}",
                 "url": "https://github.com/${REPO}/releases/download/${TAG}/${LINUX_UPDATER}",
@@ -655,7 +741,7 @@ jobs:
           echo "alpha-latest.json:"; cat alpha-latest.json
 
       - name: Publish GitHub Release
-        uses: softprops/action-gh-release@v2
+        uses: softprops/action-gh-release@3bb12739c298aeb8a4eeaf626c5b8d85266b0e65
         with:
           tag_name: ${{ needs.version.outputs.tag }}
           name: Tolaria ${{ needs.version.outputs.display_version }}
@@ -665,14 +751,18 @@ jobs:
           files: |
             updater-aarch64/*.app.tar.gz
             updater-aarch64/*.app.tar.gz.sig
+            updater-x86_64/*.app.tar.gz
+            updater-x86_64/*.app.tar.gz.sig
             linux-x86_64-bundles/*.deb
             linux-x86_64-bundles/*.deb.sig
+            linux-x86_64-bundles/*.rpm
             linux-x86_64-bundles/*.AppImage
             linux-x86_64-bundles/*.AppImage.sig
             linux-x86_64-bundles/*.AppImage.tar.gz
             linux-x86_64-bundles/*.AppImage.tar.gz.sig
             linux-x86_64-bundles/*/*.deb
             linux-x86_64-bundles/*/*.deb.sig
+            linux-x86_64-bundles/*/*.rpm
             linux-x86_64-bundles/*/*.AppImage
             linux-x86_64-bundles/*/*.AppImage.sig
             linux-x86_64-bundles/*/*.AppImage.tar.gz
@@ -692,46 +782,77 @@ jobs:
             alpha-latest.json
 
   # ─────────────────────────────────────────────────────────────
-  # Phase 4: Update GitHub Pages with release history
+  # Phase 4: Update GitHub Pages with docs, release history, and download assets
   # ─────────────────────────────────────────────────────────────
   pages:
-    name: Update release history page
+    name: Update docs and release pages
     needs: [version, release]
     runs-on: ubuntu-latest
     permissions:
-      contents: write
+      contents: read
+      pages: write
+      id-token: write
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
     concurrency:
       group: github-pages
       cancel-in-progress: false
     steps:
       - uses: actions/checkout@v4
 
+      - name: Setup pnpm
+        uses: pnpm/action-setup@f40ffcd9367d9f12939873eb1018b921a783ffaa
+        with:
+          version: 10
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: 'pnpm'
+
       - name: Setup Bun
-        uses: oven-sh/setup-bun@v2
+        uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6
         with:
           bun-version: latest
 
-      - name: Build release history page
+      - name: Setup Pages
+        uses: actions/configure-pages@v5
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Build docs and release pages
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
-          mkdir -p _site/alpha _site/stable
+          VITEPRESS_BASE="/" pnpm docs:build
+          mkdir -p _site/alpha _site/stable _site/release-notes
+          cp -R site/.vitepress/dist/. _site/
+          if [ -d release-notes ]; then cp release-notes/*.md _site/release-notes/ 2>/dev/null || true; fi
           gh api -H "Accept: application/vnd.github.html+json" repos/${{ github.repository }}/releases --paginate > _site/releases.json
-          PAGES_URL="https://refactoringhq.github.io/${GITHUB_REPOSITORY#*/}"
+          STABLE_TAG=$(gh release list --repo ${{ github.repository }} --exclude-drafts --exclude-pre-releases --limit 1 --json tagName --jq '.[0].tagName // ""')
 
           gh release download --repo ${{ github.repository }} "${{ needs.version.outputs.tag }}" --pattern "alpha-latest.json" --output _site/alpha/latest.json || echo '{}' > _site/alpha/latest.json
-          curl -fsSL "${PAGES_URL}/stable/latest.json" -o _site/stable/latest.json || echo '{}' > _site/stable/latest.json
+          if [ -n "$STABLE_TAG" ]; then
+            gh release download --repo ${{ github.repository }} "$STABLE_TAG" --pattern "stable-latest.json" --output _site/stable/latest.json || echo '{}' > _site/stable/latest.json
+          else
+            echo '{}' > _site/stable/latest.json
+          fi
           bun scripts/build-release-download-page.ts --latest-json _site/stable/latest.json --releases-json _site/releases.json --output-file _site/stable/download/index.html
-          bun scripts/build-release-history-page.ts --releases-json _site/releases.json --output-file _site/index.html
+          bun scripts/build-release-history-page.ts --releases-json _site/releases.json --output-file _site/releases/index.html
           mkdir -p _site/download
           cp _site/stable/download/index.html _site/download/index.html
 
           cp _site/alpha/latest.json _site/latest.json
           cp _site/alpha/latest.json _site/latest-canary.json
 
-      - name: Deploy to GitHub Pages
-        uses: peaceiris/actions-gh-pages@v4
+      - name: Upload Pages artifact
+        uses: actions/upload-pages-artifact@v4
         with:
-          github_token: ${{ secrets.GITHUB_TOKEN }}
-          publish_dir: ./_site
-          commit_message: "Update release history for ${{ needs.version.outputs.tag }}"
+          path: ./_site
+
+      - name: Deploy to GitHub Pages
+        id: deployment
+        uses: actions/deploy-pages@v4

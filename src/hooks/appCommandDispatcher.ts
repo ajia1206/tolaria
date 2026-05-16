@@ -43,10 +43,14 @@ export interface AppCommandHandlers {
   onToggleFavorite?: (path: string) => void
   onArchiveNote: (path: string) => void
   onDeleteNote: (path: string) => void
+  onFindInNote?: () => void
+  onReplaceInNote?: () => void
+  onPastePlainText: () => void
   onSearch: () => void
   onToggleRawEditor?: () => void
   onToggleDiff?: () => void
   onToggleAIChat?: () => void
+  onToggleTableOfContents?: () => void
   onGoBack?: () => void
   onGoForward?: () => void
   onCheckForUpdates?: () => void
@@ -76,11 +80,15 @@ type SimpleHandlerKey = keyof Pick<
   | 'onCreateType'
   | 'onQuickOpen'
   | 'onSave'
+  | 'onFindInNote'
+  | 'onReplaceInNote'
+  | 'onPastePlainText'
   | 'onSearch'
   | 'onToggleRawEditor'
   | 'onToggleDiff'
   | 'onToggleInspector'
   | 'onToggleAIChat'
+  | 'onToggleTableOfContents'
   | 'onCommandPalette'
   | 'onZoomIn'
   | 'onZoomOut'
@@ -107,44 +115,61 @@ type ActiveTabHandlerKey = keyof Pick<
   'onToggleOrganized' | 'onToggleFavorite' | 'onArchiveNote' | 'onDeleteNote'
 >
 
-const SIMPLE_HANDLER_EXECUTORS: Record<SimpleHandlerKey, (handlers: AppCommandHandlers) => void> = {
-  onOpenSettings: (handlers) => handlers.onOpenSettings(),
-  onCheckForUpdates: (handlers) => handlers.onCheckForUpdates?.(),
-  onCreateNote: (handlers) => handlers.onCreateNote(),
-  onCreateType: (handlers) => handlers.onCreateType?.(),
-  onQuickOpen: (handlers) => handlers.onQuickOpen(),
-  onSave: (handlers) => handlers.onSave(),
-  onSearch: (handlers) => handlers.onSearch(),
-  onToggleRawEditor: (handlers) => handlers.onToggleRawEditor?.(),
-  onToggleDiff: (handlers) => handlers.onToggleDiff?.(),
-  onToggleInspector: (handlers) => handlers.onToggleInspector(),
-  onToggleAIChat: (handlers) => handlers.onToggleAIChat?.(),
-  onCommandPalette: (handlers) => handlers.onCommandPalette(),
-  onZoomIn: (handlers) => handlers.onZoomIn(),
-  onZoomOut: (handlers) => handlers.onZoomOut(),
-  onZoomReset: (handlers) => handlers.onZoomReset(),
-  onGoBack: (handlers) => handlers.onGoBack?.(),
-  onGoForward: (handlers) => handlers.onGoForward?.(),
-  onOpenVault: (handlers) => handlers.onOpenVault?.(),
-  onRemoveActiveVault: (handlers) => handlers.onRemoveActiveVault?.(),
-  onRestoreGettingStarted: (handlers) => handlers.onRestoreGettingStarted?.(),
-  onAddRemote: (handlers) => handlers.onAddRemote?.(),
-  onCommitPush: (handlers) => handlers.onCommitPush?.(),
-  onPull: (handlers) => handlers.onPull?.(),
-  onResolveConflicts: (handlers) => handlers.onResolveConflicts?.(),
-  onViewChanges: (handlers) => handlers.onViewChanges?.(),
-  onInstallMcp: (handlers) => handlers.onInstallMcp?.(),
-  onReloadVault: (handlers) => handlers.onReloadVault?.(),
-  onRepairVault: (handlers) => handlers.onRepairVault?.(),
-  onOpenInNewWindow: (handlers) => handlers.onOpenInNewWindow?.(),
-  onRestoreDeletedNote: (handlers) => handlers.onRestoreDeletedNote?.(),
+type SimpleHandlerExecutor = (handlers: AppCommandHandlers) => void
+type ActiveTabHandlerExecutor = (handlers: AppCommandHandlers, path: string) => void
+
+const SIMPLE_HANDLER_EXECUTORS: readonly [SimpleHandlerKey, SimpleHandlerExecutor][] = [
+  ['onOpenSettings', (handlers) => handlers.onOpenSettings()],
+  ['onCheckForUpdates', (handlers) => handlers.onCheckForUpdates?.()],
+  ['onCreateNote', (handlers) => handlers.onCreateNote()],
+  ['onCreateType', (handlers) => handlers.onCreateType?.()],
+  ['onQuickOpen', (handlers) => handlers.onQuickOpen()],
+  ['onSave', (handlers) => handlers.onSave()],
+  ['onFindInNote', (handlers) => handlers.onFindInNote?.()],
+  ['onReplaceInNote', (handlers) => handlers.onReplaceInNote?.()],
+  ['onPastePlainText', (handlers) => handlers.onPastePlainText()],
+  ['onSearch', (handlers) => handlers.onSearch()],
+  ['onToggleRawEditor', (handlers) => handlers.onToggleRawEditor?.()],
+  ['onToggleDiff', (handlers) => handlers.onToggleDiff?.()],
+  ['onToggleInspector', (handlers) => handlers.onToggleInspector()],
+  ['onToggleAIChat', (handlers) => handlers.onToggleAIChat?.()],
+  ['onToggleTableOfContents', (handlers) => handlers.onToggleTableOfContents?.()],
+  ['onCommandPalette', (handlers) => handlers.onCommandPalette()],
+  ['onZoomIn', (handlers) => handlers.onZoomIn()],
+  ['onZoomOut', (handlers) => handlers.onZoomOut()],
+  ['onZoomReset', (handlers) => handlers.onZoomReset()],
+  ['onGoBack', (handlers) => handlers.onGoBack?.()],
+  ['onGoForward', (handlers) => handlers.onGoForward?.()],
+  ['onOpenVault', (handlers) => handlers.onOpenVault?.()],
+  ['onRemoveActiveVault', (handlers) => handlers.onRemoveActiveVault?.()],
+  ['onRestoreGettingStarted', (handlers) => handlers.onRestoreGettingStarted?.()],
+  ['onAddRemote', (handlers) => handlers.onAddRemote?.()],
+  ['onCommitPush', (handlers) => handlers.onCommitPush?.()],
+  ['onPull', (handlers) => handlers.onPull?.()],
+  ['onResolveConflicts', (handlers) => handlers.onResolveConflicts?.()],
+  ['onViewChanges', (handlers) => handlers.onViewChanges?.()],
+  ['onInstallMcp', (handlers) => handlers.onInstallMcp?.()],
+  ['onReloadVault', (handlers) => handlers.onReloadVault?.()],
+  ['onRepairVault', (handlers) => handlers.onRepairVault?.()],
+  ['onOpenInNewWindow', (handlers) => handlers.onOpenInNewWindow?.()],
+  ['onRestoreDeletedNote', (handlers) => handlers.onRestoreDeletedNote?.()],
+]
+
+const ACTIVE_TAB_HANDLER_EXECUTORS: readonly [ActiveTabHandlerKey, ActiveTabHandlerExecutor][] = [
+  ['onToggleOrganized', (handlers, path) => handlers.onToggleOrganized?.(path)],
+  ['onToggleFavorite', (handlers, path) => handlers.onToggleFavorite?.(path)],
+  ['onArchiveNote', (handlers, path) => handlers.onArchiveNote(path)],
+  ['onDeleteNote', (handlers, path) => handlers.onDeleteNote(path)],
+]
+
+function runSimpleHandler(handler: SimpleHandlerKey, handlers: AppCommandHandlers): void {
+  const executor = SIMPLE_HANDLER_EXECUTORS.find(([key]) => key === handler)?.[1]
+  executor?.(handlers)
 }
 
-const ACTIVE_TAB_HANDLER_EXECUTORS: Record<ActiveTabHandlerKey, (handlers: AppCommandHandlers, path: string) => void> = {
-  onToggleOrganized: (handlers, path) => handlers.onToggleOrganized?.(path),
-  onToggleFavorite: (handlers, path) => handlers.onToggleFavorite?.(path),
-  onArchiveNote: (handlers, path) => handlers.onArchiveNote(path),
-  onDeleteNote: (handlers, path) => handlers.onDeleteNote(path),
+function runActiveTabHandler(handler: ActiveTabHandlerKey, handlers: AppCommandHandlers, path: string): void {
+  const executor = ACTIVE_TAB_HANDLER_EXECUTORS.find(([key]) => key === handler)?.[1]
+  executor?.(handlers, path)
 }
 
 const SHORTCUT_ECHO_DEDUPE_WINDOW_MS = 150
@@ -237,8 +262,7 @@ function dispatchDefinition(
       handlers.onSelectFilter?.(definition.route.value)
       return true
     case 'handler': {
-      const handler = definition.route.handler
-      SIMPLE_HANDLER_EXECUTORS[handler as SimpleHandlerKey](handlers)
+      runSimpleHandler(definition.route.handler as SimpleHandlerKey, handlers)
       return true
     }
     case 'active-tab-handler': {
@@ -253,7 +277,7 @@ function dispatchDefinition(
 
       return dispatchActiveTabCommand(
         handlers.activeTabPathRef,
-        (path) => ACTIVE_TAB_HANDLER_EXECUTORS[handler as ActiveTabHandlerKey](handlers, path),
+        (path) => runActiveTabHandler(handler as ActiveTabHandlerKey, handlers, path),
       )
     }
   }
@@ -276,7 +300,8 @@ export function executeAppCommand(
     return false
   }
 
-  const dispatched = dispatchDefinition(APP_COMMAND_DEFINITIONS[id], handlers)
+  const definition = Reflect.get(APP_COMMAND_DEFINITIONS, id) as AppCommandDefinition
+  const dispatched = dispatchDefinition(definition, handlers)
   if (dispatched) {
     lastCommandDispatch = { id, source, timestamp }
   }

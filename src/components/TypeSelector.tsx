@@ -15,11 +15,11 @@ import {
   PROPERTY_PANEL_LABEL_ICON_SLOT_CLASS_NAME,
   PROPERTY_PANEL_ROW_STYLE,
 } from './propertyPanelLayout'
+import { translate, type AppLocale } from '../lib/i18n'
 
 const TYPE_NONE = '__none__'
 const MIN_POPOVER_WIDTH = 220
 const OPEN_COMBOBOX_KEYS = new Set(['ArrowDown', 'ArrowUp', 'Enter', ' '])
-const MISSING_TYPE_TOOLTIP = 'Missing type'
 
 interface TypeSelectorItemProps {
   type: string
@@ -69,9 +69,21 @@ function shouldOpenCombobox(event: KeyboardEvent<HTMLButtonElement>) {
   return OPEN_COMBOBOX_KEYS.has(event.key)
 }
 
+function typeMetadataValue({
+  type,
+  metadata,
+}: {
+  type: string | null | undefined
+  metadata: Record<string, string | null>
+}): string | null {
+  if (!type) return null
+  const value = Reflect.get(metadata, type)
+  return typeof value === 'string' ? value : null
+}
+
 function TypeSelectorItem({ type, typeColorKeys, typeIconKeys }: TypeSelectorItemProps) {
-  const Icon = getTypeIcon(type, typeIconKeys[type])
-  const color = getTypeColor(type, typeColorKeys[type])
+  const Icon = getTypeIcon(type, typeMetadataValue({ type, metadata: typeIconKeys }))
+  const color = getTypeColor(type, typeMetadataValue({ type, metadata: typeColorKeys }))
   return (
     <>
       {/* eslint-disable-next-line react-hooks/static-components -- icon from static map lookup */}
@@ -85,12 +97,14 @@ function TypeSelectorValue({
   isA,
   typeColorKeys,
   typeIconKeys,
+  locale,
 }: {
   isA?: string | null
   typeColorKeys: Record<string, string | null>
   typeIconKeys: Record<string, string | null>
+  locale: AppLocale
 }) {
-  if (!isA) return <span className="truncate text-muted-foreground">None</span>
+  if (!isA) return <span className="truncate text-muted-foreground">{translate(locale, 'inspector.properties.none')}</span>
 
   return (
     <span className="flex min-w-0 items-center gap-1">
@@ -115,9 +129,11 @@ function TypeRowLabel() {
 
 function MissingTypeWarning({
   missingTypeName,
+  locale,
   onCreateMissingType,
 }: {
   missingTypeName: string
+  locale: AppLocale
   onCreateMissingType?: (typeName: string) => boolean | void | Promise<boolean | void>
 }) {
   const [dialogOpen, setDialogOpen] = useState(false)
@@ -136,13 +152,13 @@ function MissingTypeWarning({
               !canCreateMissingType && 'cursor-default',
             )}
             data-testid="missing-type-warning"
-            aria-label={`Missing type ${missingTypeName}. Click to create this type.`}
+            aria-label={translate(locale, 'inspector.properties.missingTypeAria', { type: missingTypeName })}
             onClick={canCreateMissingType ? () => setDialogOpen(true) : undefined}
           >
             <WarningCircle size={14} weight="fill" aria-hidden="true" />
           </Button>
         </TooltipTrigger>
-        <TooltipContent>{MISSING_TYPE_TOOLTIP}</TooltipContent>
+        <TooltipContent>{translate(locale, 'inspector.properties.missingType')}</TooltipContent>
       </Tooltip>
       {canCreateMissingType && (
         <CreateTypeDialog
@@ -159,10 +175,12 @@ function MissingTypeWarning({
 function TypeRowValue({
   children,
   missingTypeName,
+  locale,
   onCreateMissingType,
 }: {
   children: ReactNode
   missingTypeName?: string | null
+  locale: AppLocale
   onCreateMissingType?: (typeName: string) => boolean | void | Promise<boolean | void>
 }) {
   return (
@@ -171,6 +189,7 @@ function TypeRowValue({
       {missingTypeName && (
         <MissingTypeWarning
           missingTypeName={missingTypeName}
+          locale={locale}
           onCreateMissingType={onCreateMissingType}
         />
       )}
@@ -183,12 +202,14 @@ function ReadOnlyType({
   customColorKey,
   onNavigate,
   missingTypeName,
+  locale,
   onCreateMissingType,
 }: {
   isA?: string | null
   customColorKey?: string | null
   onNavigate?: (target: string) => void
   missingTypeName?: string | null
+  locale: AppLocale
   onCreateMissingType?: (typeName: string) => boolean | void | Promise<boolean | void>
 }) {
   if (!isA) return null
@@ -198,7 +219,7 @@ function ReadOnlyType({
       style={PROPERTY_PANEL_ROW_STYLE}
     >
       <TypeRowLabel />
-      <TypeRowValue missingTypeName={missingTypeName} onCreateMissingType={onCreateMissingType}>
+      <TypeRowValue missingTypeName={missingTypeName} locale={locale} onCreateMissingType={onCreateMissingType}>
         {onNavigate ? (
           <button
             className="min-w-0 max-w-full truncate border-none cursor-pointer ring-inset hover:ring-1 hover:ring-current"
@@ -229,6 +250,7 @@ interface TypeSelectorProps {
   onNavigate?: (target: string) => void
   missingTypeName?: string | null
   onCreateMissingType?: (typeName: string) => boolean | void | Promise<boolean | void>
+  locale?: AppLocale
 }
 
 export function TypeSelector({ onUpdateProperty, ...props }: TypeSelectorProps) {
@@ -239,6 +261,7 @@ export function TypeSelector({ onUpdateProperty, ...props }: TypeSelectorProps) 
         customColorKey={props.customColorKey}
         onNavigate={props.onNavigate}
         missingTypeName={props.missingTypeName}
+        locale={props.locale ?? 'en'}
         onCreateMissingType={props.onCreateMissingType}
       />
     )
@@ -254,14 +277,16 @@ function EditableTypeSelector({
   typeColorKeys,
   typeIconKeys,
   missingTypeName,
+  locale = 'en',
   onCreateMissingType,
   onUpdateProperty,
 }: Omit<TypeSelectorProps, 'onUpdateProperty'> & {
   onUpdateProperty: (key: string, value: FrontmatterValue) => void
 }) {
   const currentValue = isA ?? TYPE_NONE
-  const typeColor = isA ? getTypeColor(isA, typeColorKeys[isA] ?? customColorKey) : undefined
-  const typeLightColor = isA ? getTypeLightColor(isA, typeColorKeys[isA] ?? customColorKey) : undefined
+  const currentTypeColorKey = typeMetadataValue({ type: isA, metadata: typeColorKeys }) ?? customColorKey
+  const typeColor = isA ? getTypeColor(isA, currentTypeColorKey) : undefined
+  const typeLightColor = isA ? getTypeLightColor(isA, currentTypeColorKey) : undefined
   const [open, setOpen] = useState(false)
   const [query, setQuery] = useState('')
   const [highlightedIndex, setHighlightedIndex] = useState(-1)
@@ -360,9 +385,9 @@ function EditableTypeSelector({
         moveHighlight('previous')
         return
       case 'Enter':
-        if (highlightedIndex < 0 || options[highlightedIndex] === undefined) return
+        if (highlightedIndex < 0 || options.at(highlightedIndex) === undefined) return
         event.preventDefault()
-        selectType(options[highlightedIndex])
+        selectType(options.at(highlightedIndex) ?? TYPE_NONE)
         return
       case 'Escape':
         event.preventDefault()
@@ -380,7 +405,7 @@ function EditableTypeSelector({
       data-testid="type-selector"
     >
       <TypeRowLabel />
-      <TypeRowValue missingTypeName={missingTypeName} onCreateMissingType={onCreateMissingType}>
+      <TypeRowValue missingTypeName={missingTypeName} locale={locale} onCreateMissingType={onCreateMissingType}>
         <Popover open={open} onOpenChange={handleOpenChange}>
           <PopoverAnchor asChild>
             <div ref={rootRef} className="min-w-0">
@@ -405,7 +430,7 @@ function EditableTypeSelector({
                 onKeyDown={handleTriggerKeyDown}
               >
                 <span className="flex min-w-0 items-center gap-1 truncate">
-                  <TypeSelectorValue isA={isA} typeColorKeys={typeColorKeys} typeIconKeys={typeIconKeys} />
+                  <TypeSelectorValue isA={isA} typeColorKeys={typeColorKeys} typeIconKeys={typeIconKeys} locale={locale} />
                 </span>
                 <CaretUpDown size={14} aria-hidden="true" />
               </Button>
@@ -424,9 +449,9 @@ function EditableTypeSelector({
               <Input
                 ref={inputRef}
                 value={query}
-                placeholder="Search types..."
+                placeholder={translate(locale, 'inspector.properties.searchTypes')}
                 autoComplete="off"
-                aria-label="Search types"
+                aria-label={translate(locale, 'inspector.properties.searchTypes')}
                 className="h-8 text-sm"
                 data-testid="type-selector-search-input"
                 onChange={(event) => handleSearchChange(event.target.value)}
@@ -436,7 +461,7 @@ function EditableTypeSelector({
             <div ref={listRef} className="max-h-60 overflow-y-auto p-1">
               {options.length === 0 ? (
                 <div className="px-2 py-6 text-center text-sm text-muted-foreground">
-                  No matching types
+                  {translate(locale, 'inspector.properties.noMatchingTypes')}
                 </div>
               ) : (
                 <div id={listboxId} role="listbox">
@@ -460,7 +485,7 @@ function EditableTypeSelector({
                         onClick={() => selectType(type)}
                       >
                         {type === TYPE_NONE ? (
-                          <span className="truncate text-muted-foreground">None</span>
+                          <span className="truncate text-muted-foreground">{translate(locale, 'inspector.properties.none')}</span>
                         ) : (
                           <span className="flex min-w-0 items-center gap-2 truncate">
                             <TypeSelectorItem type={type} typeColorKeys={typeColorKeys} typeIconKeys={typeIconKeys} />

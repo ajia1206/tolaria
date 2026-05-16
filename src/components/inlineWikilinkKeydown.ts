@@ -61,6 +61,7 @@ function handleDeleteKeys({
   onDeleteContent,
 }: HandleDeleteKeysArgs): boolean {
   if (isInlineWikilinkCompositionEvent(event, isComposing)) return false
+  if (event.altKey || event.ctrlKey || event.metaKey) return false
 
   if (event.key === 'Backspace') {
     event.preventDefault()
@@ -75,26 +76,6 @@ function handleDeleteKeys({
   }
 
   return false
-}
-
-interface HandleInsertTextArgs {
-  event: React.KeyboardEvent<HTMLDivElement>
-  isComposing: boolean
-  onInsertText: (text: string) => void
-}
-
-function handleInsertText({
-  event,
-  isComposing,
-  onInsertText,
-}: HandleInsertTextArgs): boolean {
-  if (event.metaKey || event.ctrlKey || event.altKey) return false
-  if (isInlineWikilinkCompositionEvent(event, isComposing)) return false
-  if (event.key.length !== 1) return false
-
-  event.preventDefault()
-  onInsertText(event.key)
-  return true
 }
 
 interface HandleSubmitKeyArgs {
@@ -127,7 +108,6 @@ interface HandleInlineWikilinkKeyDownArgs {
   onCycleSuggestions: (direction: 1 | -1) => void
   onSelectSuggestion: () => void
   onDeleteContent: (direction: 'backward' | 'forward') => void
-  onInsertText: (text: string) => void
   canSubmit: boolean
   onSubmit: () => void
 }
@@ -140,7 +120,6 @@ export function handleInlineWikilinkKeyDown({
   onCycleSuggestions,
   onSelectSuggestion,
   onDeleteContent,
-  onInsertText,
   canSubmit,
   onSubmit,
 }: HandleInlineWikilinkKeyDownArgs) {
@@ -157,10 +136,6 @@ export function handleInlineWikilinkKeyDown({
   }
 
   if (handleDeleteKeys({ event, isComposing, onDeleteContent })) {
-    return
-  }
-
-  if (handleInsertText({ event, isComposing, onInsertText })) {
     return
   }
 

@@ -2,6 +2,7 @@ import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
 import { renderHook, act } from '@testing-library/react'
 import type { SetStateAction } from 'react'
 import { useAppSave } from './useAppSave'
+import { AUTO_SAVE_DEBOUNCE_MS } from './useEditorSave'
 import type { VaultEntry } from '../types'
 import { isTauri } from '../mock-tauri'
 import { invoke } from '@tauri-apps/api/core'
@@ -31,6 +32,21 @@ function makeEntry(path: string, title = 'Test', filename = 'test.md'): VaultEnt
   return { path, title, filename, content: '', outgoingLinks: [], snippet: '', wordCount: 0, isA: 'Note', status: null, createdAt: null, modifiedAt: null, icon: null, tags: [] } as unknown as VaultEntry
 }
 
+function makeWorkspace(path: string, alias = 'workspace'): NonNullable<VaultEntry['workspace']> {
+  return {
+    id: alias,
+    label: alias,
+    alias,
+    path,
+    shortLabel: alias.slice(0, 2).toUpperCase(),
+    color: null,
+    icon: null,
+    mounted: true,
+    available: true,
+    defaultForNewNotes: false,
+  }
+}
+
 describe('useAppSave', () => {
   const deps = {
     updateEntry: vi.fn(),
@@ -38,6 +54,7 @@ describe('useAppSave', () => {
     handleSwitchTab: vi.fn(),
     setToastMessage: vi.fn(),
     loadModifiedFiles: vi.fn(),
+    onInternalVaultWrite: vi.fn(),
     trackUnsaved: vi.fn(),
     clearUnsaved: vi.fn(),
     unsavedPaths: new Set<string>(),
@@ -58,6 +75,7 @@ describe('useAppSave', () => {
     deps.tabs = []
     deps.activeTabPath = null
     deps.trackUnsaved.mockReset()
+    deps.onInternalVaultWrite.mockReset()
     deps.handleRenameNote.mockResolvedValue(undefined)
     deps.handleRenameFilename.mockResolvedValue(undefined)
     deps.initialH1AutoRenameEnabled = true
@@ -124,6 +142,70 @@ describe('useAppSave', () => {
     }
   }
 
+  function renderMissingVaultDraft(path = 'C:\\Users\\Luca\\Notes\\draft.md') {
+    vi.mocked(isTauri).mockReturnValue(true)
+    const entry = makeEntry(path, 'Draft', 'draft.md')
+
+    return {
+      path,
+      ...renderSave({
+        resolvedPath: '',
+        tabs: [{ entry, content: '# Draft\n\nBody' }],
+        activeTabPath: path,
+        unsavedPaths: new Set([path]),
+      }),
+    }
+  }
+
+  function renderAutoSaveScopeDraft({
+    initialVaultPath,
+    notePath,
+  }: {
+    initialVaultPath: string
+    notePath: string
+  }) {
+    vi.useFakeTimers()
+    vi.mocked(isTauri).mockReturnValue(true)
+    const entry = makeEntry(notePath, 'Draft', 'draft.md')
+    const tabs = [{ entry, content: '# Draft' }]
+
+    return {
+      entry,
+      ...renderHook(
+        ({ vaultPath }: { vaultPath: string }) => useAppSave({
+          ...deps,
+          resolvedPath: vaultPath,
+          tabs,
+          activeTabPath: entry.path,
+          unsavedPaths: new Set([entry.path]),
+        }),
+        { initialProps: { vaultPath: initialVaultPath } },
+      ),
+    }
+  }
+
+  function expectNoSaveNoteContent() {
+    expect(vi.mocked(invoke)).not.toHaveBeenCalledWith('save_note_content', expect.anything())
+    expect(deps.clearUnsaved).not.toHaveBeenCalled()
+  }
+
+  async function expectPendingAutosaveDroppedAfterVaultChange(
+    hook: ReturnType<typeof renderAutoSaveScopeDraft>,
+    nextVaultPath: string,
+  ) {
+    act(() => {
+      hook.result.current.handleContentChange(hook.entry.path, '# Draft\n\nUnsaved')
+    })
+
+    hook.rerender({ vaultPath: nextVaultPath })
+
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(AUTO_SAVE_DEBOUNCE_MS)
+    })
+
+    expectNoSaveNoteContent()
+  }
+
   it('exposes contentChangeRef', () => {
     const { result } = renderSave()
     expect(result.current.contentChangeRef).toBeDefined()
@@ -167,6 +249,92 @@ describe('useAppSave', () => {
     await act(async () => { await result.current.handleSave() })
 
     // Should complete without error
+  })
+
+  it('handles Windows invalid path save failures without clearing unsaved content', async () => {
+    vi.mocked(isTauri).mockReturnValue(true)
+    const consoleSpy = vi.spyOn(console, 'error').mockImplementation(() => {})
+    const path = 'C:\\Users\\@raflymln\\notes\\untitled-note-1777236475.md'
+    const entry = makeEntry(path, 'Untitled Note 1777236475', 'untitled-note-1777236475.md')
+    vi.mocked(invoke).mockRejectedValueOnce(
+      new Error('The filename, directory name, or volume label syntax is incorrect. (os error 123)'),
+    )
+
+    const { result } = renderSave({
+      resolvedPath: 'C:\\Users\\@raflymln\\notes',
+      tabs: [{ entry, content: '# Draft\n\nBody' }],
+      activeTabPath: path,
+      unsavedPaths: new Set([path]),
+    })
+
+    let saved = true
+    await act(async () => {
+      saved = await result.current.handleSave()
+    })
+
+    expect(saved).toBe(false)
+    expect(deps.setToastMessage).toHaveBeenCalledWith(
+      'Save failed: The note path is invalid on this platform. Rename the note or move it to a valid folder, then try again.',
+    )
+    expect(deps.clearUnsaved).not.toHaveBeenCalled()
+    expect(vi.mocked(invoke)).not.toHaveBeenCalledWith('auto_rename_untitled', expect.anything())
+    consoleSpy.mockRestore()
+  })
+
+  it('pauses manual saves when a stale editor has no active vault', async () => {
+    const { result } = renderMissingVaultDraft()
+
+    let saved = true
+    await act(async () => {
+      saved = await result.current.handleSave()
+    })
+
+    expect(saved).toBe(false)
+    expect(deps.setToastMessage).toHaveBeenCalledWith('Select or restore a vault before saving.')
+    expectNoSaveNoteContent()
+  })
+
+  it('pauses stale auto-save timers when the active vault disappears before debounce fires', async () => {
+    await expectPendingAutosaveDroppedAfterVaultChange(
+      renderAutoSaveScopeDraft({ initialVaultPath: '/vault', notePath: '/vault/draft.md' }),
+      '',
+    )
+  })
+
+  it('drops pending auto-save content when the active vault changes', async () => {
+    await expectPendingAutosaveDroppedAfterVaultChange(
+      renderAutoSaveScopeDraft({ initialVaultPath: '/old-vault', notePath: '/old-vault/draft.md' }),
+      '/new-vault',
+    )
+  })
+
+  it('ignores stale editor changes outside the active vault', async () => {
+    const { result, entry } = renderAutoSaveScopeDraft({
+      initialVaultPath: '/new-vault',
+      notePath: '/old-vault/draft.md',
+    })
+
+    act(() => {
+      result.current.handleContentChange(entry.path, '# Draft\n\nStale edit')
+    })
+
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(AUTO_SAVE_DEBOUNCE_MS)
+    })
+
+    expectNoSaveNoteContent()
+    expect(deps.trackUnsaved).not.toHaveBeenCalled()
+  })
+
+  it('does not flush unsaved tab content to disk without an active vault', async () => {
+    const { path, result } = renderMissingVaultDraft()
+
+    await act(async () => {
+      await result.current.flushBeforeAction(path)
+    })
+
+    expect(deps.setToastMessage).toHaveBeenCalledWith('Select or restore a vault before saving.')
+    expectNoSaveNoteContent()
   })
 
   it('handleContentChange is a function', () => {
@@ -231,9 +399,13 @@ describe('useAppSave', () => {
       unsavedPaths: new Set([entry.path]),
     })
 
-    await act(async () => {
+    act(() => {
       result.current.handleContentChange(entry.path, '# Fresh Title\n\nBody')
-      await vi.advanceTimersByTimeAsync(500)
+    })
+
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(AUTO_SAVE_DEBOUNCE_MS)
+      await vi.advanceTimersByTimeAsync(0)
     })
 
     expect(vi.mocked(invoke)).not.toHaveBeenCalledWith('auto_rename_untitled', expect.anything())
@@ -245,17 +417,56 @@ describe('useAppSave', () => {
 
     await act(async () => {
       await vi.advanceTimersByTimeAsync(1)
+      await vi.advanceTimersByTimeAsync(0)
     })
 
     expect(vi.mocked(invoke)).toHaveBeenCalledWith('auto_rename_untitled', {
-      vaultPath: '/vault',
-      notePath: entry.path,
+      args: {
+        vaultPath: '/vault',
+        notePath: entry.path,
+      },
     })
     expect(deps.replaceEntry).toHaveBeenCalledWith(
       entry.path,
       expect.objectContaining({ path: '/vault/fresh-title.md', filename: 'fresh-title.md' }),
       '# Fresh Title\n\nBody',
     )
+  })
+
+  it('refreshes a pending untitled auto-rename when the H1 title changes before the timer fires', async () => {
+    const partialTitleContent = '# Obsi\n'
+    const revisedTitleContent = '# Obsidian\n\nBody starts after the title is complete'
+    const { result, oldPath } = setupUntitledRenameHarness({
+      initialContent: partialTitleContent,
+      diskContent: revisedTitleContent,
+    })
+
+    await act(async () => {
+      result.current.handleContentChange(oldPath, partialTitleContent)
+      await vi.advanceTimersByTimeAsync(AUTO_SAVE_DEBOUNCE_MS)
+    })
+
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(2_300)
+      result.current.handleContentChange(oldPath, revisedTitleContent)
+      await vi.advanceTimersByTimeAsync(200)
+    })
+
+    expect(vi.mocked(invoke).mock.calls.filter(([command]) => command === 'auto_rename_untitled')).toHaveLength(0)
+
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(AUTO_SAVE_DEBOUNCE_MS)
+    })
+    expect(vi.mocked(invoke)).toHaveBeenCalledWith('save_note_content', {
+      path: oldPath,
+      content: revisedTitleContent,
+    })
+
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(2_000)
+    })
+
+    expect(vi.mocked(invoke).mock.calls.filter(([command]) => command === 'auto_rename_untitled')).toHaveLength(1)
   })
 
   it('does not auto-rename untitled notes when the H1 auto-rename preference is disabled', async () => {
@@ -280,7 +491,7 @@ describe('useAppSave', () => {
 
     await act(async () => {
       result.current.handleContentChange(entry.path, '# Fresh Title\n\nBody')
-      await vi.advanceTimersByTimeAsync(3_000)
+      await vi.advanceTimersByTimeAsync(AUTO_SAVE_DEBOUNCE_MS + 2_500)
     })
 
     expect(vi.mocked(invoke)).not.toHaveBeenCalledWith('auto_rename_untitled', expect.anything())
@@ -292,7 +503,7 @@ describe('useAppSave', () => {
 
     await act(async () => {
       result.current.handleContentChange('/vault/untitled-note-123.md', '# Fresh Title\n\nBody')
-      await vi.advanceTimersByTimeAsync(3_000)
+      await vi.advanceTimersByTimeAsync(AUTO_SAVE_DEBOUNCE_MS + 2_500)
     })
 
     expect(deps.handleSwitchTab).toHaveBeenCalledWith(newPath)
@@ -306,7 +517,7 @@ describe('useAppSave', () => {
 
     await act(async () => {
       result.current.handleContentChange('/vault/untitled-note-123.md', '# Fresh Title\n\nBody')
-      await vi.advanceTimersByTimeAsync(3_000)
+      await vi.advanceTimersByTimeAsync(AUTO_SAVE_DEBOUNCE_MS + 2_500)
     })
 
     expect(startTransitionMock).toHaveBeenCalled()
@@ -335,7 +546,7 @@ describe('useAppSave', () => {
 
     await act(async () => {
       result.current.handleContentChange(entry.path, '# Fresh Title\n\nBody')
-      await vi.advanceTimersByTimeAsync(500)
+      await vi.advanceTimersByTimeAsync(AUTO_SAVE_DEBOUNCE_MS)
     })
 
     rerender({ currentActiveTabPath: '/vault/other.md' })
@@ -352,12 +563,12 @@ describe('useAppSave', () => {
 
     await act(async () => {
       result.current.handleContentChange(oldPath, '# Fresh Title\n\nBody')
-      await vi.advanceTimersByTimeAsync(3_000)
+      await vi.advanceTimersByTimeAsync(AUTO_SAVE_DEBOUNCE_MS + 2_500)
     })
 
     await act(async () => {
       result.current.handleContentChange(oldPath, '# Fresh Title\n\nBody\n\nMore text')
-      await vi.advanceTimersByTimeAsync(500)
+      await vi.advanceTimersByTimeAsync(AUTO_SAVE_DEBOUNCE_MS)
     })
 
     const saveCalls = vi.mocked(invoke).mock.calls.filter(([command]) => command === 'save_note_content')
@@ -403,7 +614,7 @@ describe('useAppSave', () => {
 
     await act(async () => {
       result.current.handleContentChange(oldPath, '# Fresh Title\n\nBody\n\nMore text')
-      await vi.advanceTimersByTimeAsync(500)
+      await vi.advanceTimersByTimeAsync(AUTO_SAVE_DEBOUNCE_MS)
     })
 
     const saveCalls = vi.mocked(invoke).mock.calls.filter(([command]) => command === 'save_note_content')
@@ -419,6 +630,89 @@ describe('useAppSave', () => {
       oldPath,
       expect.objectContaining({ path: newPath, filename: 'manual-name.md' }),
       '# Fresh Title\n\nBody',
+    )
+  })
+
+  it('routes macOS alias-path editor saves to the renamed path', async () => {
+    vi.useFakeTimers()
+    vi.mocked(isTauri).mockReturnValue(true)
+
+    const oldPath = '/tmp/vault/fresh-title.md'
+    const aliasOldPath = '/private/tmp/vault/fresh-title.md'
+    const newPath = '/tmp/vault/manual-name.md'
+    const entry = makeEntry(oldPath, 'Fresh Title', 'fresh-title.md')
+
+    vi.mocked(invoke).mockImplementation(async (command: string) => {
+      if (command === 'save_note_content') return undefined
+      return undefined
+    })
+
+    deps.handleRenameFilename.mockImplementation(async (path, newFilenameStem, vaultPath, onEntryRenamed) => {
+      expect(path).toBe(oldPath)
+      expect(newFilenameStem).toBe('manual-name')
+      expect(vaultPath).toBe('/tmp/vault')
+      onEntryRenamed(path, { path: newPath, filename: 'manual-name.md', title: 'Fresh Title' }, '# Fresh Title\n\nBody')
+    })
+
+    const { result } = renderSave({
+      resolvedPath: '/tmp/vault',
+      tabs: [{ entry, content: '# Fresh Title\n\nBody' }],
+      activeTabPath: oldPath,
+      unsavedPaths: new Set([oldPath]),
+    })
+
+    await act(async () => {
+      await result.current.handleFilenameRename(oldPath, 'manual-name')
+    })
+
+    await act(async () => {
+      result.current.handleContentChange(aliasOldPath, '# Fresh Title\n\nBody\n\nAlias edit')
+      await vi.advanceTimersByTimeAsync(AUTO_SAVE_DEBOUNCE_MS)
+    })
+
+    const saveCalls = vi.mocked(invoke).mock.calls.filter(([command]) => command === 'save_note_content')
+    expect(saveCalls.at(-1)).toEqual([
+      'save_note_content',
+      { path: newPath, content: '# Fresh Title\n\nBody\n\nAlias edit' },
+    ])
+    expect(saveCalls).not.toContainEqual([
+      'save_note_content',
+      { path: aliasOldPath, content: '# Fresh Title\n\nBody\n\nAlias edit' },
+    ])
+  })
+
+  it('passes the active tab workspace path to manual filename renames', async () => {
+    vi.mocked(isTauri).mockReturnValue(true)
+
+    const oldPath = '/team/fresh-title.md'
+    const newPath = '/team/manual-name.md'
+    const entry = {
+      ...makeEntry(oldPath, 'Fresh Title', 'fresh-title.md'),
+      workspace: makeWorkspace('/team', 'team'),
+    }
+
+    deps.handleRenameFilename.mockImplementation(async (path, newFilenameStem, vaultPath, onEntryRenamed) => {
+      expect(path).toBe(oldPath)
+      expect(newFilenameStem).toBe('manual-name')
+      expect(vaultPath).toBe('/team')
+      onEntryRenamed(path, { path: newPath, filename: 'manual-name.md', title: 'Fresh Title' }, '# Fresh Title\n')
+    })
+
+    const { result } = renderSave({
+      resolvedPath: '/personal',
+      tabs: [{ entry, content: '# Fresh Title\n' }],
+      activeTabPath: oldPath,
+    })
+
+    await act(async () => {
+      await result.current.handleFilenameRename(oldPath, 'manual-name')
+    })
+
+    expect(deps.handleRenameFilename).toHaveBeenCalledWith(
+      oldPath,
+      'manual-name',
+      '/team',
+      expect.any(Function),
     )
   })
 
@@ -454,7 +748,7 @@ describe('useAppSave', () => {
 
     await act(async () => {
       result.current.handleContentChange(oldPath, '# Fresh Title\n\nBody')
-      await vi.advanceTimersByTimeAsync(500)
+      await vi.advanceTimersByTimeAsync(AUTO_SAVE_DEBOUNCE_MS)
     })
 
     currentTabs = [{ entry, content: '# Fresh Title\n\nBody that keeps changing while rename is pending' }]
@@ -475,6 +769,18 @@ describe('useAppSave', () => {
     )
     expect(getTabs()[0].entry.path).toBe(newPath)
     expect(getTabs()[0].content).toBe('# Fresh Title\n\nBody that keeps changing while rename is pending')
+  })
+
+  it('marks untitled auto-rename paths as internal vault writes', async () => {
+    const { result, oldPath, newPath } = setupUntitledRenameHarness()
+
+    await act(async () => {
+      result.current.handleContentChange(oldPath, '# Fresh Title\n\nBody')
+      await vi.advanceTimersByTimeAsync(AUTO_SAVE_DEBOUNCE_MS + 2_500)
+    })
+
+    expect(deps.onInternalVaultWrite).toHaveBeenCalledWith(oldPath)
+    expect(deps.onInternalVaultWrite).toHaveBeenCalledWith(newPath)
   })
 
   it('does not run markdown title-sync renames for non-markdown text files', async () => {
@@ -538,7 +844,7 @@ describe('useAppSave', () => {
 
     await act(async () => {
       result.current.handleContentChange(oldPath, initialContent)
-      await vi.advanceTimersByTimeAsync(500)
+      await vi.advanceTimersByTimeAsync(AUTO_SAVE_DEBOUNCE_MS)
     })
 
     await act(async () => {
@@ -548,7 +854,7 @@ describe('useAppSave', () => {
     })
 
     await act(async () => {
-      await vi.advanceTimersByTimeAsync(300)
+      await vi.advanceTimersByTimeAsync(AUTO_SAVE_DEBOUNCE_MS - 200)
     })
 
     const saveCalls = vi.mocked(invoke).mock.calls.filter(([command]) => command === 'save_note_content')
@@ -574,7 +880,7 @@ describe('useAppSave', () => {
 
     await act(async () => {
       result.current.handleContentChange(oldPath, initialContent)
-      await vi.advanceTimersByTimeAsync(3_000)
+      await vi.advanceTimersByTimeAsync(AUTO_SAVE_DEBOUNCE_MS + 2_500)
     })
 
     const saveCallsBeforeRename = vi.mocked(invoke).mock.calls.filter(([command]) => command === 'save_note_content')
@@ -586,7 +892,7 @@ describe('useAppSave', () => {
 
     await act(async () => {
       result.current.handleContentChange(oldPath, bodyDuringRename)
-      await vi.advanceTimersByTimeAsync(500)
+      await vi.advanceTimersByTimeAsync(AUTO_SAVE_DEBOUNCE_MS)
     })
 
     const saveCallsWhileRenamePending = vi.mocked(invoke).mock.calls.filter(([command]) => command === 'save_note_content')

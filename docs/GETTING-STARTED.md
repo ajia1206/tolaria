@@ -29,6 +29,32 @@ If you run the desktop app on Linux, install Tauri's WebKit2GTK 4.1 dependencies
     libappindicator-gtk3-devel librsvg2-devel
   ```
 
+### Linux AppImage Wayland troubleshooting
+
+On some Wayland systems, the Linux AppImage may fail to launch with:
+
+```text
+Could not create default EGL display: EGL_BAD_PARAMETER. Aborting...
+```
+
+Recent Tolaria Linux builds automatically disable unstable WebKitGTK rendering paths on Wayland and AppImage launches. AppImage launches also retry startup with an architecture-matching system Wayland client library when they detect this class of AppImage + Wayland environment. If you are running an older build, use this workaround:
+
+```bash
+WEBKIT_DISABLE_COMPOSITING_MODE=1 WEBKIT_DISABLE_DMABUF_RENDERER=1 LD_PRELOAD=/usr/lib64/libwayland-client.so.0 ./Tolaria*.AppImage
+```
+
+If your distribution stores the 64-bit library elsewhere, use that path instead, for example `/usr/lib/x86_64-linux-gnu/libwayland-client.so.0`. On 64-bit Fedora, avoid `/usr/lib/libwayland-client.so.0`; that path can point at a 32-bit library and be ignored by the loader with a wrong ELF class warning.
+
+### Linux AppImage packaging checks
+
+Linux release CI currently uses Tauri's stock linuxdeploy AppImage output plugin:
+
+```bash
+pnpm tauri build --target x86_64-unknown-linux-gnu --bundles deb,rpm,appimage
+```
+
+Release validation verifies that the Linux job produced an AppImage, at least one installer bundle, and updater signature artifacts. The experimental AppImage output-plugin shim in `scripts/appimage-launcher-tools.mjs` is retained for local investigation, but it is not wired into release packaging because linuxdeploy currently exits before sealing the AppImage when the shim is pre-seeded in Tauri's tools cache.
+
 ## Quick Start
 
 ```bash
@@ -53,13 +79,23 @@ pnpm playwright:regression  # Full Playwright regression suite
 
 `create_getting_started_vault` clones the public starter repo and then removes every git remote from the new local copy. That means Getting Started vaults open local-only by default. Users connect a compatible remote later through the bottom-bar `No remote` chip or the command palette, both of which feed the same `AddRemoteModal` and `git_add_remote` backend flow.
 
+Linux AppImage builds still use the user's system `git` and `node`. Before Tolaria spawns those Git or MCP Node subprocesses, it removes AppImage loader overrides such as `LD_LIBRARY_PATH`, `LD_PRELOAD`, and `GIT_EXEC_PATH` so HTTPS clone helpers and MCP tooling use the host library stack instead of bundled AppImage libraries.
+
+## Multiple Vaults At The Same Time
+
+The `settings.multi_workspace_enabled` flag turns the registered vault list into a unified graph. When enabled, `useVaultLoader` loads every available mounted vault, annotates entries with workspace provenance, and lets note lists, quick open, keyword search, backlinks, and wikilink navigation span those vaults.
+
+The selected/default vault remains the write and repository focus. New notes and Type documents use `defaultWorkspacePath` when it points at an available mounted vault, while Git status, commits, sync, folder tree, repair, and watcher behavior stay scoped to explicit repository roots. Saved Views are listed from every mounted vault with source-vault identity, so duplicate view filenames remain separate and edits persist back to the view's owning vault.
+
+The bottom-left `VaultMenu` exposes quick include/exclude controls and a `Manage vaults` entry. The Vaults settings section owns the full identity controls: display name, short label, read-only alias, accent color, removal, and default destination for new notes.
+
 ## Directory Structure
 
 ```
 tolaria/
 ├── src/                          # React frontend
 │   ├── main.tsx                  # Entry point (renders <App />)
-│   ├── App.tsx                   # Root component — orchestrates layout + state
+│   ├── App.tsx                   # Root component — wires layout + state hooks
 │   ├── App.css                   # App shell layout styles
 │   ├── types.ts                  # Shared TS types (VaultEntry, Settings, etc.)
 │   ├── mock-tauri.ts             # Mock Tauri layer for browser testing
@@ -79,7 +115,7 @@ tolaria/
 │   │   ├── RawEditorView.tsx     # CodeMirror raw editor
 │   │   ├── Inspector.tsx         # Fourth panel: metadata + relationships
 │   │   ├── DynamicPropertiesPanel.tsx  # Editable frontmatter properties
-│   │   ├── AiPanel.tsx           # AI agent panel (selected CLI agent)
+│   │   ├── AiPanel.tsx           # AI agent panel (selected CLI agent + per-vault permission mode)
 │   │   ├── AiMessage.tsx         # Agent message display
 │   │   ├── AiActionCard.tsx      # Agent tool action cards
 │   │   ├── AiAgentsOnboardingPrompt.tsx # First-launch AI agent installer prompt
@@ -106,16 +142,16 @@ tolaria/
 │   │   └── ui/                   # shadcn/ui primitives
 │   │       ├── button.tsx, dialog.tsx, input.tsx, ...
 │   │
-│   ├── hooks/                    # Custom React hooks (~87 files)
+│   ├── hooks/                    # Custom React hooks (~90 files)
 │   │   ├── useVaultLoader.ts     # Loads vault entries + content
 │   │   ├── useVaultSwitcher.ts   # Multi-vault management
 │   │   ├── useVaultConfig.ts     # Per-vault UI settings
 │   │   ├── useNoteActions.ts     # Composes creation + rename + frontmatter
 │   │   ├── useNoteCreation.ts    # Note/type creation
 │   │   ├── useNoteRename.ts     # Note renaming + wikilink updates
-│   │   ├── useAiAgent.ts         # Legacy Claude-specific stream helpers reused by the shared agent hook
-│   │   ├── useCliAiAgent.ts      # Selected AI agent state + normalized tool tracking
-│   │   ├── useAiAgentsStatus.ts  # Claude/Codex availability polling
+│   │   ├── useCliAiAgent.ts      # Selected AI agent state + normalized session pipeline
+│   │   ├── aiAgentPermissionMode.ts # Safe/Power User mode normalization + labels
+│   │   ├── useAiAgentsStatus.ts  # Claude/Codex/OpenCode/Pi/Gemini availability polling
 │   │   ├── useAiAgentPreferences.ts # Default-agent persistence + cycling
 │   │   ├── useAiActivity.ts      # MCP UI bridge listener
 │   │   ├── useAutoSync.ts        # Auto git pull/push
@@ -141,6 +177,7 @@ tolaria/
 │   ├── utils/                    # Pure utility functions (~48 files)
 │   │   ├── wikilinks.ts          # Wikilink preprocessing pipeline
 │   │   ├── frontmatter.ts        # TypeScript YAML parser
+│   │   ├── plainTextPaste.ts     # Shared Paste without Formatting command target registry
 │   │   ├── platform.ts           # Runtime platform + Linux chrome gating helpers
 │   │   ├── ai-agent.ts           # Agent stream utilities
 │   │   ├── ai-chat.ts            # Token estimation utilities
@@ -157,6 +194,8 @@ tolaria/
 │   ├── lib/
 │   │   ├── aiAgents.ts           # Shared agent registry + status helpers
 │   │   ├── appUpdater.ts         # Frontend wrapper around channel-aware updater commands
+│   │   ├── i18n.ts               # App-owned localization runtime and locale resolution
+│   │   ├── locales/              # JSON locale catalogs (English source + translated locales)
 │   │   ├── releaseChannel.ts     # Alpha/stable normalization helpers
 │   │   └── utils.ts              # Tailwind merge + cn() helper
 │   │
@@ -187,10 +226,13 @@ tolaria/
 │   │   │   ├── conflict.rs, remote.rs, pulse.rs
 │   │   ├── telemetry.rs          # Sentry init + path scrubber
 │   │   ├── search.rs             # Keyword search (walkdir-based)
-│   │   ├── ai_agents.rs          # Shared CLI-agent detection + stream adapters
-│   │   ├── claude_cli.rs         # Claude CLI subprocess management
+│   │   ├── ai_agents.rs          # CLI-agent request normalization + adapter dispatch
+│   │   ├── cli_agent_runtime.rs  # Shared CLI-agent runtime process/prompt/MCP helpers
+│   │   ├── claude_cli.rs         # Claude CLI adapter
+│   │   ├── codex_cli.rs          # Codex CLI adapter
+│   │   ├── pi_cli.rs             # Pi CLI adapter
 │   │   ├── mcp.rs                # MCP server lifecycle + explicit config registration/removal
-│   │   ├── app_updater.rs        # Alpha/stable updater endpoint selection
+│   │   ├── app_updater.rs        # Alpha/stable updater metadata resolution
 │   │   ├── settings.rs           # App settings persistence
 │   │   ├── vault_config.rs       # Per-vault UI config
 │   │   ├── vault_list.rs         # Vault list persistence
@@ -211,6 +253,7 @@ tolaria/
 ├── scripts/                      # Build/utility scripts
 │
 ├── package.json                  # Frontend dependencies + scripts
+├── lara.yaml                     # Lara CLI locale sync configuration
 ├── vite.config.ts                # Vite bundler config
 ├── tsconfig.json                 # TypeScript config
 ├── playwright.config.ts          # Full Playwright regression config
@@ -233,7 +276,7 @@ tolaria/
 
 | File | Why it matters |
 |------|---------------|
-| `src/App.tsx` | Root component. Shows the 4-panel layout, state flow, and how all features connect. |
+| `src/App.tsx` | Root component. Shows the 4-panel layout, state flow, and how orchestration hooks connect. |
 | `src/types.ts` | All shared TypeScript types. Read this first to understand the data model. |
 | `src-tauri/src/commands/` | Tauri command handlers (split into modules). This is the frontend-backend API surface. |
 | `src-tauri/src/lib.rs` | Tauri setup, command registration, startup tasks, WebSocket bridge lifecycle. |
@@ -246,6 +289,10 @@ tolaria/
 | `src/hooks/useNoteActions.ts` | Orchestrates note operations: composes `useNoteCreation`, `useNoteRename`, frontmatter CRUD, and wikilink navigation. |
 | `src/hooks/useVaultSwitcher.ts` | Multi-vault management, vault switching, and persisting cloned vaults in the switcher list. |
 | `src/hooks/useGettingStartedClone.ts` | Shared "Clone Getting Started Vault" action for the status bar and command palette. |
+| `src/hooks/useNoteWindowLifecycle.ts` | Note-window URL opening, asset-scope sync, and window-title updates. |
+| `src/hooks/useVaultRenameDetection.ts` | Focus-triggered Git rename detection and wikilink update action wiring. |
+| `src/hooks/useStartupScreenState.ts` | Startup-screen and vault-content loading visibility decisions. |
+| `src/hooks/useGitFileWorkflows.ts` | Git diff/history/discard wiring and deleted-note preview workflow. |
 | `src/components/AddRemoteModal.tsx` | Modal UI for connecting a local-only vault to a compatible remote. |
 | `src/mock-tauri.ts` | Mock data for browser testing. Shows the shape of all Tauri responses. |
 
@@ -258,9 +305,10 @@ tolaria/
 | `src-tauri/src/frontmatter/ops.rs` | YAML manipulation — how properties are updated/deleted in files. |
 | `src-tauri/src/git/` | All git operations (clone, commit, pull, push, conflicts, pulse, add-remote). |
 | `src-tauri/src/search.rs` | Keyword search — scans vault files with walkdir. |
-| `src-tauri/src/ai_agents.rs` | Shared CLI-agent availability checks, safe-default Codex adapter, and stream normalization. |
-| `src-tauri/src/claude_cli.rs` | Claude CLI subprocess spawning + NDJSON stream parsing. |
-| `src-tauri/src/app_updater.rs` | Desktop updater bridge — selects alpha/stable manifests and streams install progress. |
+| `src-tauri/src/ai_agents.rs` | CLI-agent request normalization, availability aggregation, adapter dispatch, and Claude event mapping. |
+| `src-tauri/src/cli_agent_runtime.rs` | Shared CLI-agent request shape, prompt wrapping, JSON subprocess lifecycle, version probing, and MCP path helpers. |
+| `src-tauri/src/claude_cli.rs`, `src-tauri/src/codex_cli.rs`, `src-tauri/src/opencode_cli.rs`, `src-tauri/src/pi_cli.rs`, `src-tauri/src/gemini_cli.rs` | Per-agent command, config, discovery, and JSON event adapters. |
+| `src-tauri/src/app_updater.rs` | Desktop updater bridge — resolves alpha/stable manifests and streams install progress. |
 
 ### Editor
 
@@ -278,8 +326,11 @@ tolaria/
 
 | File | Why it matters |
 |------|---------------|
-| `src/components/AiPanel.tsx` | AI agent panel — selected CLI agent with tool execution, reasoning, and actions. |
-| `src/hooks/useCliAiAgent.ts` | Agent state: messages, streaming, tool tracking, file detection. |
+| `src/components/AiPanel.tsx` | AI agent panel — selected CLI agent with tool execution, reasoning, actions, and per-vault permission mode. |
+| `src/hooks/useCliAiAgent.ts` | Thin React owner for the selected CLI agent session state. |
+| `src/lib/aiAgentSession.ts` | Single message/session lifecycle for prompt normalization, history, streaming, and reset behavior. |
+| `src/lib/aiAgentPermissionMode.ts` | Safe/Power User mode normalization, display labels, and local transcript marker text. |
+| `src/lib/aiAgentFileOperations.ts` | Detects agent-created or modified vault files from normalized tool inputs. |
 | `src/lib/aiAgents.ts` | Supported agent definitions, status normalization, and default-agent helpers. |
 | `src/utils/ai-context.ts` | Context snapshot builder for AI conversations. |
 
@@ -287,19 +338,19 @@ tolaria/
 
 | File | Why it matters |
 |------|---------------|
-| `src/index.css` | Semantic CSS custom properties for app-owned light/dark themes. |
+| `src/index.css` | Semantic CSS custom properties for app-owned light/dark themes; System mode resolves to one of these at runtime. |
 | `src/theme.json` | Editor-specific typography theme (fonts, headings, lists, code blocks). |
 
 ### Settings & Config
 
 | File | Why it matters |
 |------|---------------|
-| `src/hooks/useSettings.ts` | App settings (telemetry, release channel, theme mode, auto-sync interval, default AI agent). |
+| `src/hooks/useSettings.ts` | App settings (telemetry, release channel, theme mode, UI language, date display format, auto-sync interval, default note width, sidebar type pluralization, default AI agent). |
 | `src/lib/releaseChannel.ts` | Normalizes persisted updater-channel values (`stable` default, optional `alpha`). |
 | `src/lib/appUpdater.ts` | Frontend wrapper for channel-aware updater commands. |
 | `src/hooks/useMainWindowSizeConstraints.ts` | Derives the main-window minimum width from the visible panes and asks Tauri to grow back to fit wider layouts. |
-| `src/hooks/useVaultConfig.ts` | Per-vault local UI preferences (zoom, view mode, colors, Inbox columns, explicit organization workflow). |
-| `src/components/SettingsPanel.tsx` | Settings UI for telemetry, release channel, sync interval, default AI agent, and the vault-level explicit organization toggle. |
+| `src/hooks/useVaultConfig.ts` | Per-vault local UI preferences (zoom, view mode, colors, Inbox columns, explicit organization workflow, AI permission mode). |
+| `src/components/SettingsPanel.tsx` | Settings UI for telemetry, release channel, sync interval, UI language, content display preferences, default AI agent, and the vault-level explicit organization toggle. |
 | `src/hooks/useUpdater.ts` | In-app updates using the selected alpha/stable feed. |
 
 ## Architecture Patterns
@@ -335,9 +386,11 @@ type SidebarSelection =
 
 ### Command Registry
 
-`useCommandRegistry` + `useAppCommands` build a centralized command registry. Commands are registered with labels, shortcuts, and handlers. The `CommandPalette` (Cmd+K) fuzzy-searches this registry. Shortcut combos live in `appCommandCatalog.ts`; real keypresses always flow through `useAppKeyboard`, native menu clicks emit the same command IDs through `useMenuEvents`, and `appCommandDispatcher.ts` suppresses the duplicate native/renderer echo from a single shortcut. On macOS, any browser-reserved chord that WKWebView swallows before that path must also be added to the narrow `tauri-plugin-prevent-default` registration in `src-tauri/src/lib.rs`. On Linux, `LinuxTitlebar.tsx` and `LinuxMenuButton.tsx` reuse the same command IDs through `trigger_menu_command` because the native GTK menu bar is intentionally not mounted. The same shortcut manifest also declares the deterministic QA mode for each shortcut-capable command.
+`useCommandRegistry` + `useAppCommands` build a centralized command registry. Commands are registered with labels, shortcuts, and handlers. The `CommandPalette` (Cmd+K) fuzzy-searches this registry. Settings commands can update installation-local preferences directly when they reuse an existing settings path, such as the Light/Dark/System theme-mode actions writing `settings.theme_mode`. Shortcut combos live in `appCommandCatalog.ts`; real keypresses always flow through `useAppKeyboard`, native menu clicks emit the same command IDs through `useMenuEvents`, and `appCommandDispatcher.ts` suppresses the duplicate native/renderer echo from a single shortcut. Plain-text paste follows this same path: the command owns `Cmd+Shift+V`, the menu and palette expose the same action, and `plainTextPaste.ts` resolves the active rich/raw editor target or focused text control before reading clipboard text. On macOS, any browser-reserved chord that WKWebView swallows before that path must also be added to the narrow `tauri-plugin-prevent-default` registration in `src-tauri/src/lib.rs`. On Windows, native menu clicks arrive from the main `WebviewWindow`, so `src-tauri/src/menu.rs` must keep its window-scoped menu event handler in addition to the app-level handler. On Linux, `LinuxTitlebar.tsx` and `LinuxMenuButton.tsx` reuse the same command IDs through `trigger_menu_command` because the native GTK menu bar is intentionally not mounted. The same shortcut manifest also declares the deterministic QA mode for each shortcut-capable command.
 
 Commands whose availability depends on the current note or Git state must also flow through `update_menu_state` so the native menu stays in sync with the command palette. The deleted-note restore action in Changes view is the reference example: the row opens a deleted diff preview, the command palette exposes "Restore Deleted Note", and the Note menu enables the same action only while that preview is active.
+
+Current-note find/replace is a surface-aware command: editor focus enables "Find in Note" / "Replace in Note" and routes Cmd+F into raw CodeMirror mode; note-list focus enables existing note-list search instead. When adding another focus-dependent command, mirror this pattern with an availability event consumed by `useMenuEvents.ts` and `update_menu_state`.
 
 For automated shortcut QA, use the explicit proof path from `appCommandCatalog.ts`:
 
@@ -378,7 +431,7 @@ BASE_URL="http://localhost:5173" npx playwright test tests/smoke/<slug>.spec.ts
 1. Write the Rust function in the appropriate module (`vault/`, `git/`, etc.)
 2. Add a command handler in `commands/`
 3. Register it in the `generate_handler![]` macro in `lib.rs`
-4. Call it from the frontend via `invoke()` in the appropriate hook
+4. Call it from the frontend via `invoke()` in the appropriate hook or utility, keeping native-only permission work behind the Tauri command boundary
 5. Add a mock handler in `mock-tauri.ts`
 
 ### Add a new component
@@ -390,7 +443,7 @@ BASE_URL="http://localhost:5173" npx playwright test tests/smoke/<slug>.spec.ts
 
 ### Add a new entity type
 
-1. Create a type document: `type/mytype.md` with `type: Type` frontmatter (icon, color, order, etc.)
+1. Create a type document at the vault root: `mytype.md` with `type: Type` frontmatter (icon, color, order, etc.)
 2. The sidebar section groups are auto-generated from type documents — no code change needed if `visible: true`
 3. Update `CreateNoteDialog.tsx` type options if users should be able to create it from the dialog
 4. Notes of this type are created at the vault root with `type: MyType` in frontmatter — no dedicated folder needed
@@ -412,5 +465,15 @@ BASE_URL="http://localhost:5173" npx playwright test tests/smoke/<slug>.spec.ts
 1. **Agent system prompt**: Edit `src/utils/ai-agent.ts` (inline system prompt string)
 2. **Context building**: Edit `src/utils/ai-context.ts` for what data is sent to the agent
 3. **Tool action display**: Edit `src/components/AiActionCard.tsx`
-4. **Claude CLI arguments**: Edit `src-tauri/src/claude_cli.rs` (`run_agent_stream()`)
-5. **Shared agent adapters / Codex args**: Edit `src-tauri/src/ai_agents.rs` (keep Codex on the normal approval/sandbox path unless you are intentionally designing an advanced mode)
+4. **Permission-mode UI and request plumbing**: Edit `src/lib/aiAgentPermissionMode.ts`, `src/components/AiPanel*.tsx`, `src/hooks/useCliAiAgent.ts`, and `src/utils/streamAiAgent.ts`
+5. **Shared CLI runtime behavior**: Edit `src-tauri/src/cli_agent_runtime.rs` for process lifecycle, prompt wrapping, version probing, and common Tolaria MCP path handling.
+6. **Agent-specific arguments/events**: Edit the per-agent adapter modules (`claude_cli.rs`, `codex_cli.rs`, `opencode_*`, `pi_*`, `gemini_*`). Keep Codex Safe on `read-only` + `untrusted` and Codex Power User on active-vault `workspace-write` + `never`, keep Pi and Gemini on transient MCP config, and do not use dangerous permission bypasses unless an ADR explicitly designs a new mode. Pi's transient agent directory must be seeded from the user's existing Pi agent directory before Tolaria MCP is merged so standalone provider/auth setup keeps working. Gemini Power User intentionally uses Gemini's `yolo` mode per ADR-0103.
+
+### Work with external MCP setup
+
+1. **Backend registration/status/snippets**: Edit `src-tauri/src/mcp.rs` and its `src-tauri/src/mcp/` helpers; registration and manual config generation must verify Node.js first, resolve the packaged `mcp-server/` for macOS, Windows executable-adjacent installs such as `%LOCALAPPDATA%\Tolaria`, Linux package roots (`/usr/local/Tolaria`, `/usr/local/lib/tolaria`, `/usr/lib/tolaria`, `/usr/lib/tolaria/resources`), and AppImage installs, and use a vault-neutral entry with `WS_UI_PORT=9711`. Linux AppImage startup must extract `mcp-server/` to `~/.local/share/tolaria/mcp-server/` before durable registration uses that stable path. App-owned bridge launches still pass `VAULT_PATH`/`VAULT_PATHS`; durable external registrations rely on the Node MCP server reading `vaults.json` at tool-call time.
+2. **Setup dialog copy/actions**: Edit `src/components/McpSetupDialog.tsx` and `src/hooks/useMcpStatus.ts`; users should see the Node.js prerequisite, the exact generated manual config, and a copy action before Tolaria writes third-party config files
+3. **Status hook/toasts**: Edit `src/hooks/useMcpStatus.ts` when setup, reconnect, disconnect, or failure messaging changes
+4. **Gemini CLI compatibility**: Keep `~/.gemini/settings.json` in the registration path list and keep optional `GEMINI.md` generation behind `restore_vault_ai_guidance`; app-managed Gemini sessions still require the user to install and sign in to Gemini CLI, but Tolaria supplies transient MCP settings when Gemini is selected as the default AI agent
+5. **OpenCode compatibility**: Keep `~/.config/opencode/opencode.json` in durable registration. OpenCode uses the top-level `mcp` key, `command` as an array, `environment` for env vars, `type: "local"`, and `enabled: true`; it must remain vault-neutral like the standard `mcpServers` entry.
+6. **Process lifecycle and vault guidance**: Stdio MCP servers in `mcp-server/index.js` must exit when their external client closes stdin, and the desktop-owned `ws-bridge.js` child must be stopped on vault deselection, vault switch, and app exit. MCP context must include root `AGENTS.md` instructions for every active mounted workspace when those files exist.

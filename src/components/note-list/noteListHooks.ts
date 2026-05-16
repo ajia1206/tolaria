@@ -18,6 +18,8 @@ import { useMultiSelect, type MultiSelectState } from '../../hooks/useMultiSelec
 import { useNoteListKeyboard } from '../../hooks/useNoteListKeyboard'
 import { prefetchNoteContent } from '../../hooks/useTabManagement'
 import type { NoteListPropertiesScope } from './noteListPropertiesEvents'
+import type { AllNotesFileVisibility } from '../../utils/allNotesFileVisibility'
+import { viewMatchesSelection } from '../../utils/viewIdentity'
 
 // --- useTypeEntryMap ---
 
@@ -36,6 +38,7 @@ interface FilteredEntriesParams {
   subFilter?: NoteListFilter
   inboxPeriod?: InboxPeriod
   views?: ViewFile[]
+  allNotesFileVisibility?: AllNotesFileVisibility
 }
 
 function buildFilteredEntries({
@@ -50,6 +53,7 @@ function buildFilteredEntries({
   subFilter,
   inboxPeriod,
   views,
+  allNotesFileVisibility,
 }: FilteredEntriesParams & {
   isEntityView: boolean
   isChangesView: boolean
@@ -61,7 +65,11 @@ function buildFilteredEntries({
     return entries.filter((entry) => isModifiedEntry(entry.path, modifiedPathSet, modifiedSuffixes))
   }
   if (isInboxView) return filterInboxEntries(entries, inboxPeriod ?? 'month')
-  return filterEntries(entries, selection, subFilter, views)
+  return filterEntries(entries, selection, {
+    subFilter,
+    views,
+    allNotesFileVisibility,
+  })
 }
 
 export function useFilteredEntries({
@@ -73,6 +81,7 @@ export function useFilteredEntries({
   subFilter,
   inboxPeriod,
   views,
+  allNotesFileVisibility,
 }: FilteredEntriesParams) {
   const isEntityView = selection.kind === 'entity'
   const isChangesView = selection.kind === 'filter' && selection.filter === 'changes'
@@ -90,8 +99,9 @@ export function useFilteredEntries({
       subFilter,
       inboxPeriod,
       views,
+      allNotesFileVisibility,
     })
-  }, [entries, inboxPeriod, isChangesView, isEntityView, isInboxView, modifiedFiles, modifiedPathSet, modifiedSuffixes, selection, subFilter, views])
+  }, [allNotesFileVisibility, entries, inboxPeriod, isChangesView, isEntityView, isInboxView, modifiedFiles, modifiedPathSet, modifiedSuffixes, selection, subFilter, views])
 }
 
 // --- useNoteListData ---
@@ -104,9 +114,23 @@ interface NoteListDataParams {
   subFilter?: NoteListFilter
   inboxPeriod?: InboxPeriod
   views?: ViewFile[]
+  allNotesFileVisibility?: AllNotesFileVisibility
 }
 
-export function useNoteListData({ entries, selection, query, listSort, listDirection, modifiedPathSet, modifiedSuffixes, modifiedFiles, subFilter, inboxPeriod, views }: NoteListDataParams) {
+export function useNoteListData({
+  entries,
+  selection,
+  query,
+  listSort,
+  listDirection,
+  modifiedPathSet,
+  modifiedSuffixes,
+  modifiedFiles,
+  subFilter,
+  inboxPeriod,
+  views,
+  allNotesFileVisibility,
+}: NoteListDataParams) {
   const isEntityView = selection.kind === 'entity'
   const isArchivedView = (selection.kind === 'filter' && selection.filter === 'archived') || subFilter === 'archived'
   const entityEntry = useMemo(() => {
@@ -123,6 +147,7 @@ export function useNoteListData({ entries, selection, query, listSort, listDirec
     subFilter,
     inboxPeriod,
     views,
+    allNotesFileVisibility,
   })
 
   const searched = useMemo(() => {
@@ -159,7 +184,7 @@ const DEFAULT_LIST_CONFIG: SortConfig = { option: 'modified', direction: 'desc' 
 
 function findSelectedViewFile(selection: SidebarSelection, views?: ViewFile[]): ViewFile | null {
   if (selection.kind !== 'view') return null
-  return views?.find((candidate) => candidate.filename === selection.filename) ?? null
+  return views?.find((candidate) => viewMatchesSelection(candidate, selection)) ?? null
 }
 
 function findSelectedTypeDocument(entries: VaultEntry[], selection: SidebarSelection): VaultEntry | null {
@@ -188,7 +213,7 @@ function resolveListSortConfig(
 interface SortPersistence {
   onUpdateTypeSort?: (path: string, key: string, value: string) => void
   updateEntry?: (path: string, patch: Partial<VaultEntry>) => void
-  onUpdateViewDefinition?: (filename: string, patch: Partial<ViewDefinition>) => void
+  onUpdateViewDefinition?: (filename: string, patch: Partial<ViewDefinition>, rootPath?: string) => void
 }
 
 function createSortPersistence(
@@ -211,13 +236,16 @@ function persistSortToView(
   filename: string,
   config: SortConfig,
   onUpdateViewDefinition: NonNullable<SortPersistence['onUpdateViewDefinition']>,
+  rootPath?: string,
 ) {
-  onUpdateViewDefinition(filename, { sort: serializeSortConfig(config) })
+  const patch = { sort: serializeSortConfig(config) }
+  if (rootPath) onUpdateViewDefinition(filename, patch, rootPath)
+  else onUpdateViewDefinition(filename, patch)
 }
 
 type SortPersistenceTarget =
   | { kind: 'type'; path: string }
-  | { kind: 'view'; filename: string }
+  | { kind: 'view'; filename: string; rootPath?: string }
 
 function canPersistTypeSort(
   persistence: SortPersistence,
@@ -236,7 +264,7 @@ function resolveSortPersistenceTarget(
     return { kind: 'type', path: typeDocument.path }
   }
   if (selectedView && persistence.onUpdateViewDefinition) {
-    return { kind: 'view', filename: selectedView.filename }
+    return { kind: 'view', filename: selectedView.filename, rootPath: selectedView.rootPath }
   }
   return null
 }
@@ -248,7 +276,7 @@ function persistListSort(target: SortPersistenceTarget, config: SortConfig, pers
   }
 
   if (persistence.onUpdateViewDefinition) {
-    persistSortToView(target.filename, config, persistence.onUpdateViewDefinition)
+    persistSortToView(target.filename, config, persistence.onUpdateViewDefinition, target.rootPath)
   }
 }
 
@@ -292,6 +320,13 @@ function deriveEffectiveSort(configOption: SortOption, customProperties: string[
   return customProperties.includes(configOption.slice('property:'.length)) ? configOption : 'modified'
 }
 
+function includeConfiguredSortProperty(customProperties: string[], configOption: SortOption): string[] {
+  if (!configOption.startsWith('property:')) return customProperties
+  const propertyName = configOption.slice('property:'.length)
+  if (!propertyName || customProperties.includes(propertyName)) return customProperties
+  return [...customProperties, propertyName].sort((a, b) => a.localeCompare(b))
+}
+
 export interface UseNoteListSortParams {
   entries: VaultEntry[]
   selection: SidebarSelection
@@ -301,7 +336,7 @@ export interface UseNoteListSortParams {
   inboxPeriod?: InboxPeriod
   views?: ViewFile[]
   onUpdateTypeSort?: (path: string, key: string, value: string | number | boolean | string[] | null) => void
-  onUpdateViewDefinition?: (filename: string, patch: Partial<ViewDefinition>) => void
+  onUpdateViewDefinition?: (filename: string, patch: Partial<ViewDefinition>, rootPath?: string) => void
   updateEntry?: (path: string, patch: Partial<VaultEntry>) => void
 }
 
@@ -357,7 +392,10 @@ export function useNoteListSort({
     inboxPeriod,
     views,
   })
-  const customProperties = useMemo(() => extractSortableProperties(filteredEntries), [filteredEntries])
+  const customProperties = useMemo(
+    () => includeConfiguredSortProperty(extractSortableProperties(filteredEntries), listConfig.option),
+    [filteredEntries, listConfig.option],
+  )
   const listSort = useMemo<SortOption>(() => deriveEffectiveSort(listConfig.option, customProperties), [listConfig.option, customProperties])
   const listDirection = listSort === listConfig.option ? listConfig.direction : 'desc'
 
@@ -366,9 +404,13 @@ export function useNoteListSort({
 
 // --- useMultiSelectKeyboard ---
 
-function isInputFocused(): boolean {
-  const el = document.activeElement
-  return el instanceof HTMLInputElement || el instanceof HTMLTextAreaElement || !!(el as HTMLElement)?.isContentEditable
+function isInputHtmlElementFocused(): boolean {
+  const activeHTMLElement = document.activeElement
+  if (!(activeHTMLElement instanceof HTMLElement)) return false
+
+  return activeHTMLElement.tagName === 'INPUT'
+    || activeHTMLElement.tagName === 'TEXTAREA'
+    || activeHTMLElement.isContentEditable
 }
 
 function handleEscapeKey(e: KeyboardEvent, multiSelect: MultiSelectState) {
@@ -378,7 +420,7 @@ function handleEscapeKey(e: KeyboardEvent, multiSelect: MultiSelectState) {
 }
 
 function handleSelectAllKey(e: KeyboardEvent, multiSelect: MultiSelectState, isEntityView: boolean) {
-  if (e.key !== 'a' || !(e.metaKey || e.ctrlKey) || isEntityView || isInputFocused()) return
+  if (e.key !== 'a' || !(e.metaKey || e.ctrlKey) || isEntityView || isInputHtmlElementFocused()) return
   e.preventDefault()
   multiSelect.selectAll()
 }
@@ -530,8 +572,8 @@ function useAllNotesPropertyPickerState(
   const allNotesEntries = useMemo(
     () => isAllNotesView
       ? [
-          ...filterEntries(entries, selection, 'open'),
-          ...filterEntries(entries, selection, 'archived'),
+          ...filterEntries(entries, selection, { subFilter: 'open' }),
+          ...filterEntries(entries, selection, { subFilter: 'archived' }),
         ]
       : [],
     [entries, isAllNotesView, selection],
@@ -588,7 +630,7 @@ function useViewPropertyPickerState(
     [selection, views],
   )
   const viewEntries = useMemo(
-    () => selectedView ? filterEntries(entries, selection, undefined, views) : [],
+    () => selectedView ? filterEntries(entries, selection, { views }) : [],
     [entries, selection, selectedView, views],
   )
 
@@ -674,7 +716,7 @@ interface BuildViewPropertyPickerParams {
   selectedView: ViewFile | null
   availableProperties: string[]
   defaultDisplay: string[]
-  onUpdateViewDefinition?: (filename: string, patch: Partial<ViewDefinition>) => void
+  onUpdateViewDefinition?: (filename: string, patch: Partial<ViewDefinition>, rootPath?: string) => void
 }
 
 function buildViewPropertyPicker({
@@ -693,7 +735,11 @@ function buildViewPropertyPicker({
     scope: 'view',
     availableProperties,
     currentDisplay,
-    onSave: (value: string[] | null) => onUpdateViewDefinition(selectedView.filename, { listPropertiesDisplay: value ?? [] }),
+    onSave: (value: string[] | null) => {
+      const patch = { listPropertiesDisplay: value ?? [] }
+      if (selectedView.rootPath) onUpdateViewDefinition(selectedView.filename, patch, selectedView.rootPath)
+      else onUpdateViewDefinition(selectedView.filename, patch)
+    },
     triggerTitle: `Customize ${selectedView.definition.name} columns`,
   }
 }
@@ -735,7 +781,7 @@ interface UseListPropertyPickerParams {
   onUpdateAllNotesNoteListProperties?: (value: string[] | null) => void
   inboxNoteListProperties?: string[] | null
   onUpdateInboxNoteListProperties?: (value: string[] | null) => void
-  onUpdateViewDefinition?: (filename: string, patch: Partial<ViewDefinition>) => void
+  onUpdateViewDefinition?: (filename: string, patch: Partial<ViewDefinition>, rootPath?: string) => void
   onUpdateTypeSort?: (path: string, key: string, value: string | number | boolean | string[] | null) => void
   views?: ViewFile[]
 }
@@ -744,7 +790,7 @@ function resolvePropertyPicker(options: {
   selectedView: ViewFile | null
   viewAvailableProperties: string[]
   viewDefaultDisplay: string[]
-  onUpdateViewDefinition?: (filename: string, patch: Partial<ViewDefinition>) => void
+  onUpdateViewDefinition?: (filename: string, patch: Partial<ViewDefinition>, rootPath?: string) => void
   isAllNotesView: boolean
   allNotesAvailableProperties: string[]
   hasCustomAllNotesProperties: boolean
@@ -793,6 +839,77 @@ function resolvePropertyPicker(options: {
   })
 }
 
+type ResolvePropertyPickerOptions = Parameters<typeof resolvePropertyPicker>[0]
+
+function useResolvedPropertyPicker({
+  selectedView,
+  viewAvailableProperties,
+  viewDefaultDisplay,
+  onUpdateViewDefinition,
+  isAllNotesView,
+  allNotesAvailableProperties,
+  hasCustomAllNotesProperties,
+  allNotesNoteListProperties,
+  allNotesDefaultDisplay,
+  onUpdateAllNotesNoteListProperties,
+  isInboxView,
+  inboxAvailableProperties,
+  hasCustomInboxProperties,
+  inboxNoteListProperties,
+  inboxDefaultDisplay,
+  onUpdateInboxNoteListProperties,
+  isSectionGroup,
+  typeDocument,
+  onUpdateTypeSort,
+  typeAvailableProperties,
+}: ResolvePropertyPickerOptions) {
+  return useMemo<NoteListPropertyPicker | null>(() => {
+    return resolvePropertyPicker({
+      selectedView,
+      viewAvailableProperties,
+      viewDefaultDisplay,
+      onUpdateViewDefinition,
+      isAllNotesView,
+      allNotesAvailableProperties,
+      hasCustomAllNotesProperties,
+      allNotesNoteListProperties,
+      allNotesDefaultDisplay,
+      onUpdateAllNotesNoteListProperties,
+      isInboxView,
+      inboxAvailableProperties,
+      hasCustomInboxProperties,
+      inboxNoteListProperties,
+      inboxDefaultDisplay,
+      onUpdateInboxNoteListProperties,
+      isSectionGroup,
+      typeDocument,
+      onUpdateTypeSort,
+      typeAvailableProperties,
+    })
+  }, [
+    allNotesAvailableProperties,
+    allNotesDefaultDisplay,
+    allNotesNoteListProperties,
+    hasCustomAllNotesProperties,
+    hasCustomInboxProperties,
+    isAllNotesView,
+    inboxAvailableProperties,
+    inboxDefaultDisplay,
+    inboxNoteListProperties,
+    isInboxView,
+    isSectionGroup,
+    onUpdateAllNotesNoteListProperties,
+    onUpdateInboxNoteListProperties,
+    onUpdateTypeSort,
+    onUpdateViewDefinition,
+    selectedView,
+    typeAvailableProperties,
+    typeDocument,
+    viewAvailableProperties,
+    viewDefaultDisplay,
+  ])
+}
+
 export function useListPropertyPicker({
   entries,
   selection,
@@ -830,56 +947,37 @@ export function useListPropertyPicker({
     hasCustomViewProperties: viewState.hasCustomProperties,
   })
 
-  const propertyPicker = useMemo<NoteListPropertyPicker | null>(() => {
-    return resolvePropertyPicker({
-      selectedView: viewState.selectedView,
-      viewAvailableProperties: viewState.availableProperties,
-      viewDefaultDisplay: viewState.defaultDisplay,
-      onUpdateViewDefinition,
-      isAllNotesView,
-      allNotesAvailableProperties: allNotesState.availableProperties,
-      hasCustomAllNotesProperties,
-      allNotesNoteListProperties,
-      allNotesDefaultDisplay: allNotesState.defaultDisplay,
-      onUpdateAllNotesNoteListProperties,
-      isInboxView,
-      inboxAvailableProperties: inboxState.availableProperties,
-      hasCustomInboxProperties,
-      inboxNoteListProperties,
-      inboxDefaultDisplay: inboxState.defaultDisplay,
-      onUpdateInboxNoteListProperties,
-      isSectionGroup,
-      typeDocument,
-      onUpdateTypeSort,
-      typeAvailableProperties,
-    })
-  }, [
-    allNotesState.availableProperties,
-    allNotesState.defaultDisplay,
-    allNotesNoteListProperties,
-    hasCustomAllNotesProperties,
-    hasCustomInboxProperties,
-    isAllNotesView,
-    inboxState.availableProperties,
-    inboxState.defaultDisplay,
-    viewState.availableProperties,
-    viewState.defaultDisplay,
-    viewState.selectedView,
+  const propertyPicker = useResolvedPropertyPicker({
+    selectedView: viewState.selectedView,
+    viewAvailableProperties: viewState.availableProperties,
+    viewDefaultDisplay: viewState.defaultDisplay,
     onUpdateViewDefinition,
+    isAllNotesView,
+    allNotesAvailableProperties: allNotesState.availableProperties,
+    hasCustomAllNotesProperties,
+    allNotesNoteListProperties,
+    allNotesDefaultDisplay: allNotesState.defaultDisplay,
     onUpdateAllNotesNoteListProperties,
-    inboxNoteListProperties,
     isInboxView,
-    isSectionGroup,
+    inboxAvailableProperties: inboxState.availableProperties,
+    hasCustomInboxProperties,
+    inboxNoteListProperties,
+    inboxDefaultDisplay: inboxState.defaultDisplay,
     onUpdateInboxNoteListProperties,
+    isSectionGroup,
+    typeDocument,
     onUpdateTypeSort,
     typeAvailableProperties,
-    typeDocument,
-  ])
+  })
 
   return { displayPropsOverride, propertyPicker }
 }
 
 // --- useNoteListInteractions ---
+
+function canPrefetchEntryContent(entry: VaultEntry): boolean {
+  return !isDeletedNoteEntry(entry) && entry.fileKind !== 'binary'
+}
 
 interface UseNoteListInteractionsParams {
   searched: VaultEntry[]
@@ -970,7 +1068,7 @@ function useKeyboardInteractionState({
   }, [onOpenDeletedNote, onReplaceActiveTab])
 
   const handleKeyboardPrefetch = useCallback((entry: VaultEntry) => {
-    if (!isDeletedNoteEntry(entry)) prefetchNoteContent(entry.path)
+    if (canPrefetchEntryContent(entry)) prefetchNoteContent(entry)
   }, [])
 
   const handleNeighborhoodOpen = useCallback(async (entry: VaultEntry) => {

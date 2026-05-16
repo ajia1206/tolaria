@@ -47,6 +47,35 @@ describe('buildReleaseHistoryPage', () => {
     expect(html).toContain('<strong>Alpha</strong> notes')
     expect(html).toContain('Tolaria-setup.exe')
     expect(html).toContain('View on GitHub')
+    expect(html).not.toContain('class="release-channel"')
+  })
+
+  it('loads readable notes for stable releases at runtime and keeps commits as the fallback', () => {
+    const html = buildReleaseHistoryPage([
+      {
+        body: "## What's Changed\n\n- ee71a00 feat: add paste without formatting command",
+        body_html: [
+          '<h2>What&apos;s Changed</h2>',
+          '<ul>',
+          '<li><a href="https://github.com/refactoringhq/tolaria/commit/ee71a00">ee71a00</a> feat: add paste without formatting command</li>',
+          '</ul>',
+        ].join(''),
+        html_url: 'https://github.com/refactoringhq/tolaria/releases/tag/stable-v2026.5.2',
+        name: 'Tolaria 2026.5.2',
+        prerelease: false,
+        published_at: '2026-05-02T16:15:00Z',
+        tag_name: 'stable-v2026.5.2',
+      },
+    ])
+
+    expect(html).toContain('data-readable-notes-url="release-notes/stable-v2026.5.2.md"')
+    expect(html).toContain("fetch(notesUrl, { cache: 'no-cache' })")
+    expect(html).toContain('ee71a00')
+    expect(html).toContain('feat: add paste without formatting command')
+    expect(html).not.toContain('data-release-detail-tab')
+    expect(html).not.toContain('>Readable<')
+    expect(html).not.toContain('>Commits<')
+    expect(html).not.toContain('📋 <strong>Paste Without Formatting</strong>')
   })
 
   it('falls back to escaped paragraph markup when rendered html is unavailable', () => {
@@ -90,6 +119,52 @@ describe('buildReleaseHistoryPage', () => {
 
     expect(html.indexOf('Tolaria Alpha 2026.4.20.12')).toBeLessThan(html.indexOf('Tolaria Alpha 2026.4.20.10'))
     expect(html.indexOf('Tolaria Alpha 2026.4.20.10')).toBeLessThan(html.indexOf('Tolaria Alpha 2026.4.20.9'))
+  })
+
+  it('deduplicates equivalent stable calendar tags and keeps the richer notes', () => {
+    const html = buildReleaseHistoryPage([
+      {
+        assets: [
+          {
+            browser_download_url: 'https://example.com/Tolaria_2026.5.13_macOS_Silicon.dmg',
+            name: 'Tolaria_2026.5.13_macOS_Silicon.dmg',
+          },
+        ],
+        body: '## What&apos;s Changed\n\n<ul><li></li></ul>',
+        body_html: '<h2>What&apos;s Changed</h2><ul><li></li></ul>',
+        html_url: 'https://github.com/refactoringhq/tolaria/releases/tag/stable-v2026.5.13',
+        name: 'Tolaria 2026.5.13',
+        prerelease: false,
+        published_at: '2026-05-13T09:30:44Z',
+        tag_name: 'stable-v2026.5.13',
+      },
+      {
+        assets: [
+          {
+            browser_download_url: 'https://example.com/Tolaria_2026.5.13_macOS_Silicon.dmg',
+            name: 'Tolaria_2026.5.13_macOS_Silicon.dmg',
+          },
+        ],
+        body_html: [
+          '<h2>What&apos;s Changed</h2>',
+          '<h3>Features</h3>',
+          '<ul>',
+          '<li>Add AI visibility setting</li>',
+          '<li>Support mounted vault workspaces</li>',
+          '</ul>',
+        ].join(''),
+        html_url: 'https://github.com/refactoringhq/tolaria/releases/tag/v2026-05-13',
+        name: 'Tolaria v2026-05-13',
+        prerelease: false,
+        published_at: '2026-05-13T09:21:30Z',
+        tag_name: 'v2026-05-13',
+      },
+    ])
+
+    expect(html).toContain('Stable<span class="tab-count">1</span>')
+    expect(html).toContain('Tolaria v2026-05-13')
+    expect(html).toContain('Add AI visibility setting')
+    expect(html).not.toContain('Tolaria 2026.5.13')
   })
 
   it('filters draft releases and shows an empty state for channels without published builds', () => {

@@ -4,10 +4,27 @@ import {
   orderInverseRelationshipLabels as sortInverseRelationshipLabels,
   resolveInverseRelationshipLabel,
 } from './inverseRelationshipLabels'
+import {
+  DEFAULT_ALL_NOTES_FILE_VISIBILITY,
+  isOptionalAllNotesFileVisible,
+  type AllNotesFileVisibility,
+} from './allNotesFileVisibility'
+import {
+  DEFAULT_DATE_DISPLAY_FORMAT,
+  formatTimestampForDateDisplay,
+  type DateDisplayFormat,
+} from './dateDisplay'
 import { evaluateView } from './viewFilters'
+import { viewMatchesSelection } from './viewIdentity'
 import { wikilinkTarget, resolveEntry } from './wikilink'
 
 export type NoteListFilter = 'open' | 'archived'
+
+export interface FilterEntriesOptions {
+  subFilter?: NoteListFilter
+  views?: ViewFile[]
+  allNotesFileVisibility?: AllNotesFileVisibility
+}
 
 export interface RelationshipGroup {
   label: string
@@ -34,12 +51,15 @@ export function getDisplayDate(entry: VaultEntry): number | null {
   return entry.modifiedAt ?? entry.createdAt
 }
 
-export function formatSubtitle(entry: VaultEntry): string {
+export function formatSubtitle(
+  entry: VaultEntry,
+  dateDisplayFormat: DateDisplayFormat = DEFAULT_DATE_DISPLAY_FORMAT,
+): string {
   const parts: string[] = []
   const date = getDisplayDate(entry)
-  if (date) parts.push(relativeDate(date))
+  if (date) parts.push(formatTimestampForDateDisplay(date, dateDisplayFormat))
   if (entry.wordCount > 0) {
-    parts.push(`${entry.wordCount.toLocaleString()} words`)
+    parts.push(`${entry.wordCount.toLocaleString('en-US')} words`)
   } else {
     parts.push('Empty')
   }
@@ -53,15 +73,18 @@ function wasCreatedBeforeLastModification(entry: VaultEntry): boolean {
   return !!(entry.createdAt && entry.modifiedAt && entry.createdAt !== entry.modifiedAt)
 }
 
-export function formatSearchSubtitle(entry: VaultEntry): string {
+export function formatSearchSubtitle(
+  entry: VaultEntry,
+  dateDisplayFormat: DateDisplayFormat = DEFAULT_DATE_DISPLAY_FORMAT,
+): string {
   const parts: string[] = []
   const modified = entry.modifiedAt ?? entry.createdAt
-  if (modified) parts.push(relativeDate(modified))
+  if (modified) parts.push(formatTimestampForDateDisplay(modified, dateDisplayFormat))
   if (wasCreatedBeforeLastModification(entry)) {
-    parts.push(`Created ${relativeDate(entry.createdAt!)}`)
+    parts.push(`Created ${formatTimestampForDateDisplay(entry.createdAt!, dateDisplayFormat)}`)
   }
   if (entry.wordCount > 0) {
-    parts.push(`${entry.wordCount.toLocaleString()} words`)
+    parts.push(`${entry.wordCount.toLocaleString('en-US')} words`)
   } else {
     parts.push('Empty')
   }
@@ -106,6 +129,7 @@ export interface SortConfig {
 }
 
 export const DEFAULT_SORT_OPTIONS: SortOption[] = ['modified', 'created', 'title', 'status']
+const BUILT_IN_SORT_OPTIONS = new Set<string>(DEFAULT_SORT_OPTIONS)
 
 export function getDefaultDirection(option: SortOption): SortDirection {
   if (option === 'modified' || option === 'created') return 'desc'
@@ -138,6 +162,7 @@ export function extractSortableProperties(entries: VaultEntry[]): string[] {
 const STATUS_ORDER: Record<string, number> = {
   Active: 0, Paused: 1, Done: 2, Finished: 3,
 }
+const STATUS_ORDER_LOOKUP = new Map(Object.entries(STATUS_ORDER))
 
 const ISO_DATE_RE = /^\d{4}-\d{2}-\d{2}/
 
@@ -166,8 +191,8 @@ function comparePropertyValues(a: unknown, b: unknown): number {
 
 function makePropertyComparator(key: string, flip: number): (a: VaultEntry, b: VaultEntry) => number {
   return (a, b) => {
-    const va = a.properties?.[key] ?? null
-    const vb = b.properties?.[key] ?? null
+    const va = (a.properties ? Reflect.get(a.properties, key) : null) ?? null
+    const vb = (b.properties ? Reflect.get(b.properties, key) : null) ?? null
     if (va == null && vb == null) return 0
     if (va == null) return 1
     if (vb == null) return -1
@@ -176,11 +201,11 @@ function makePropertyComparator(key: string, flip: number): (a: VaultEntry, b: V
 }
 
 function makeBuiltinComparator(option: string, flip: number): (a: VaultEntry, b: VaultEntry) => number {
-  if (option === 'title') return (a, b) => flip * a.title.localeCompare(b.title)
+  if (option === 'title') return (a, b) => flip * stringField(a.title).localeCompare(stringField(b.title))
   if (option === 'created') return (a, b) => flip * ((a.createdAt ?? a.modifiedAt ?? 0) - (b.createdAt ?? b.modifiedAt ?? 0))
   if (option === 'status') return (a, b) => {
-    const sa = STATUS_ORDER[a.status ?? ''] ?? 999
-    const sb = STATUS_ORDER[b.status ?? ''] ?? 999
+    const sa = STATUS_ORDER_LOOKUP.get(a.status ?? '') ?? 999
+    const sb = STATUS_ORDER_LOOKUP.get(b.status ?? '') ?? 999
     if (sa !== sb) return flip * (sa - sb)
     return (getDisplayDate(b) ?? 0) - (getDisplayDate(a) ?? 0)
   }
@@ -206,7 +231,13 @@ export function parseSortConfig(raw: string | null | undefined): SortConfig | nu
   if (lastColon <= 0) return null
   const dir = raw.slice(lastColon + 1)
   if (dir !== 'asc' && dir !== 'desc') return null
-  const option = raw.slice(0, lastColon) as SortOption
+  const optionName = raw.slice(0, lastColon)
+  if (optionName === 'property:') return null
+  const option = (
+    optionName.startsWith('property:') || BUILT_IN_SORT_OPTIONS.has(optionName)
+      ? optionName
+      : `property:${optionName}`
+  ) as SortOption
   return { option, direction: dir }
 }
 
@@ -220,9 +251,9 @@ export function loadSortPreferences(): Record<string, SortConfig> {
       if (typeof value === 'string') {
         // Migrate old format: bare SortOption string → SortConfig
         const opt = value as SortOption
-        result[key] = { option: opt, direction: getDefaultDirection(opt) }
+        Reflect.set(result, key, { option: opt, direction: getDefaultDirection(opt) })
       } else {
-        result[key] = value as SortConfig
+        Reflect.set(result, key, value as SortConfig)
       }
     }
     return result
@@ -255,10 +286,31 @@ export function clearListSortFromLocalStorage(): void {
   } catch { /* ignore */ }
 }
 
+function stringField(value: unknown): string {
+  return typeof value === 'string' ? value : ''
+}
+
+function filenameStemFromEntry(entry: VaultEntry): string {
+  const filename = stringField(entry.filename)
+  if (filename) return filename.replace(/\.md$/, '')
+
+  const pathLeaf = stringField(entry.path).split(/[\\/]/u).pop() ?? ''
+  return pathLeaf.replace(/\.md$/, '')
+}
+
+function relativePathStemFromEntry(entry: VaultEntry): string {
+  const normalizedPath = stringField(entry.path).replaceAll('\\', '/')
+  return normalizedPath.replace(/^.*\/Laputa\//, '').replace(/\.md$/, '')
+}
+
+function linkTargetsForEntry(entry: VaultEntry): Set<string> {
+  const title = stringField(entry.title)
+  const aliases = Array.isArray(entry.aliases) ? entry.aliases : []
+  return new Set([title, ...aliases, filenameStemFromEntry(entry), relativePathStemFromEntry(entry)].filter(Boolean))
+}
+
 function findBacklinks(entity: VaultEntry, allEntries: VaultEntry[]): VaultEntry[] {
-  const stem = entity.filename.replace(/\.md$/, '')
-  const pathStem = entity.path.replace(/^.*\/Laputa\//, '').replace(/\.md$/, '')
-  const targets = new Set([entity.title, ...entity.aliases, stem, pathStem])
+  const targets = linkTargetsForEntry(entity)
 
   return allEntries.filter((e) => {
     if (e.path === entity.path) return false
@@ -379,7 +431,7 @@ export function buildRelationshipGroups(
   Object.keys(rels)
     .filter((k) => k.toLowerCase() !== 'type')
     .sort((a, b) => a.localeCompare(b))
-    .forEach((key) => b.addFromRefs(key, rels[key] ?? []))
+    .forEach((key) => b.addFromRefs(key, (Reflect.get(rels, key) as string[] | undefined) ?? []))
 
   collectInverseRelationshipGroups(entity, allEntries).forEach((group) => b.add(group.label, group.entries))
   b.add('Backlinks', findBacklinks(entity, allEntries).sort(sortByModified))
@@ -397,23 +449,71 @@ function applySubFilter(entries: VaultEntry[], subFilter: NoteListFilter): Vault
 }
 
 function isInFolder(entryPath: string, folderRelPath: string): boolean {
-  const needle = '/' + folderRelPath + '/'
-  return entryPath.includes(needle) || entryPath.startsWith(folderRelPath + '/')
+  const folderPath = normalizeFolderPath(folderRelPath)
+  if (!folderPath) return false
+  const normalizedEntryPath = normalizeFolderPath(entryPath)
+  return normalizedEntryPath.includes(`/${folderPath}/`) || normalizedEntryPath.startsWith(`${folderPath}/`)
 }
 
-export function isAllNotesEntry(entry: VaultEntry): boolean {
-  return isMarkdown(entry) && !isInFolder(entry.path, ATTACHMENTS_FOLDER)
+function normalizeFolderPath(path: string): string {
+  return path.replace(/\\/g, '/').replace(/^\/+|\/+$/g, '')
 }
 
-function filterViewEntries(entries: VaultEntry[], filename: string, views?: ViewFile[]): VaultEntry[] {
-  const view = views?.find((candidate) => candidate.filename === filename)
+export function isAllNotesEntry(
+  entry: VaultEntry,
+  allNotesFileVisibility: AllNotesFileVisibility = DEFAULT_ALL_NOTES_FILE_VISIBILITY,
+): boolean {
+  if (isMarkdown(entry)) return !isInFolder(entry.path, ATTACHMENTS_FOLDER)
+  return isOptionalAllNotesFileVisible(entry, allNotesFileVisibility)
+}
+
+function entriesScopedToView(entries: VaultEntry[], view: ViewFile): VaultEntry[] {
+  if (!view.rootPath) return entries
+  return entries.filter((entry) => entry.workspace?.path === view.rootPath)
+}
+
+export function filterEntriesForViewFile(entries: VaultEntry[], view: ViewFile): VaultEntry[] {
+  return evaluateView(view.definition, entriesScopedToView(entries, view).filter(isMarkdown))
+}
+
+function filterViewEntries(entries: VaultEntry[], selection: Extract<SidebarSelection, { kind: 'view' }>, views?: ViewFile[]): VaultEntry[] {
+  const view = views?.find((candidate) => viewMatchesSelection(candidate, selection))
   if (!view) return []
-  return evaluateView(view.definition, entries.filter(isMarkdown))
+  return filterEntriesForViewFile(entries, view)
 }
 
-function filterFolderEntries(entries: VaultEntry[], folderPath: string, subFilter?: NoteListFilter): VaultEntry[] {
+function isDirectRootEntry(entryPath: string, rootPath?: string): boolean {
+  const normalizedEntryPath = normalizeFolderPath(entryPath)
+  const normalizedRootPath = rootPath ? normalizeFolderPath(rootPath) : ''
+  if (!normalizedRootPath) return !normalizedEntryPath.includes('/')
+  if (!normalizedEntryPath.startsWith(`${normalizedRootPath}/`)) return false
+  const relativePath = normalizedEntryPath.slice(normalizedRootPath.length + 1)
+  return relativePath.length > 0 && !relativePath.includes('/')
+}
+
+function pathRelativeToRoot(entryPath: string, rootPath?: string): string | null {
+  const normalizedRootPath = rootPath ? normalizeFolderPath(rootPath) : ''
+  if (!normalizedRootPath) return normalizeFolderPath(entryPath)
+
+  const normalizedEntryPath = normalizeFolderPath(entryPath)
+  if (!normalizedEntryPath.startsWith(`${normalizedRootPath}/`)) return null
+  return normalizedEntryPath.slice(normalizedRootPath.length + 1)
+}
+
+function isEntryInSelectedFolder(entryPath: string, folderRelPath: string, rootPath?: string): boolean {
+  const relativeEntryPath = pathRelativeToRoot(entryPath, rootPath)
+  return relativeEntryPath ? isInFolder(relativeEntryPath, folderRelPath) : false
+}
+
+function filterRootEntries(entries: VaultEntry[], rootPath: string | undefined, subFilter?: NoteListFilter): VaultEntry[] {
+  const rootEntries = entries.filter((entry) => isDirectRootEntry(entry.path, rootPath))
+  return subFilter ? applySubFilter(rootEntries, subFilter) : rootEntries.filter(isActive)
+}
+
+function filterFolderEntries(entries: VaultEntry[], selection: Extract<SidebarSelection, { kind: 'folder' }>, subFilter?: NoteListFilter): VaultEntry[] {
+  if (!selection.path) return filterRootEntries(entries, selection.rootPath, subFilter)
   // Folder view shows ALL files (text + binary), not just markdown
-  const folderEntries = entries.filter((entry) => isInFolder(entry.path, folderPath))
+  const folderEntries = entries.filter((entry) => isEntryInSelectedFolder(entry.path, selection.path, selection.rootPath))
   return subFilter ? applySubFilter(folderEntries, subFilter) : folderEntries.filter(isActive)
 }
 
@@ -425,21 +525,25 @@ function filterSectionGroupEntries(entries: VaultEntry[], type: string, subFilte
 function filterTopLevelEntries(
   entries: VaultEntry[],
   selection: Extract<SidebarSelection, { kind: 'filter' }>,
-  subFilter?: NoteListFilter,
+  options: FilterEntriesOptions,
 ): VaultEntry[] {
   const filterableEntries = selection.filter === 'all'
-    ? entries.filter(isAllNotesEntry)
+    ? entries.filter((entry) => isAllNotesEntry(entry, options.allNotesFileVisibility))
     : entries.filter(isMarkdown)
-  if (selection.filter === 'all' && subFilter) return applySubFilter(filterableEntries, subFilter)
+  if (selection.filter === 'all' && options.subFilter) return applySubFilter(filterableEntries, options.subFilter)
   return filterByFilterType(filterableEntries, selection.filter)
 }
 
-function filterByKind(entries: VaultEntry[], selection: SidebarSelection, subFilter?: NoteListFilter, views?: ViewFile[]): VaultEntry[] {
+function filterByKind(
+  entries: VaultEntry[],
+  selection: SidebarSelection,
+  options: FilterEntriesOptions,
+): VaultEntry[] {
   if (selection.kind === 'entity') return []
-  if (selection.kind === 'view') return filterViewEntries(entries, selection.filename, views)
-  if (selection.kind === 'folder') return filterFolderEntries(entries, selection.path, subFilter)
-  if (selection.kind === 'sectionGroup') return filterSectionGroupEntries(entries, selection.type, subFilter)
-  if (selection.kind === 'filter') return filterTopLevelEntries(entries, selection, subFilter)
+  if (selection.kind === 'view') return filterViewEntries(entries, selection, options.views)
+  if (selection.kind === 'folder') return filterFolderEntries(entries, selection, options.subFilter)
+  if (selection.kind === 'sectionGroup') return filterSectionGroupEntries(entries, selection.type, options.subFilter)
+  if (selection.kind === 'filter') return filterTopLevelEntries(entries, selection, options)
   return []
 }
 
@@ -451,8 +555,12 @@ function filterByFilterType(entries: VaultEntry[], filter: string): VaultEntry[]
   return []
 }
 
-export function filterEntries(entries: VaultEntry[], selection: SidebarSelection, subFilter?: NoteListFilter, views?: ViewFile[]): VaultEntry[] {
-  return filterByKind(entries, selection, subFilter, views)
+export function filterEntries(
+  entries: VaultEntry[],
+  selection: SidebarSelection,
+  options: FilterEntriesOptions = {},
+): VaultEntry[] {
+  return filterByKind(entries, selection, options)
 }
 
 /** Count notes per sub-filter for a given type. */
@@ -480,9 +588,14 @@ export function countAllByFilter(entries: VaultEntry[]): Record<NoteListFilter, 
   return countEntriesByArchiveStatus(entries.filter(isMarkdown))
 }
 
-/** Count All Notes-eligible documents per sub-filter, excluding files under attachments/. */
-export function countAllNotesByFilter(entries: VaultEntry[]): Record<NoteListFilter, number> {
-  return countEntriesByArchiveStatus(entries.filter(isAllNotesEntry))
+/** Count All Notes-eligible documents per sub-filter using the current file visibility policy. */
+export function countAllNotesByFilter(
+  entries: VaultEntry[],
+  allNotesFileVisibility?: AllNotesFileVisibility,
+): Record<NoteListFilter, number> {
+  return countEntriesByArchiveStatus(
+    entries.filter((entry) => isAllNotesEntry(entry, allNotesFileVisibility)),
+  )
 }
 
 // --- Inbox ---
@@ -498,11 +611,13 @@ export function isInboxEntry(entry: VaultEntry): boolean {
 const INBOX_PERIOD_DAYS: Record<InboxPeriod, number> = {
   week: 7, month: 30, quarter: 90, all: Infinity,
 }
+const INBOX_PERIOD_DAYS_LOOKUP = new Map(Object.entries(INBOX_PERIOD_DAYS) as Array<[InboxPeriod, number]>)
 
 /** Filter entries for the Inbox view: not organized, within the given time period, sorted by createdAt desc. */
 export function filterInboxEntries(entries: VaultEntry[], period: InboxPeriod): VaultEntry[] {
   const now = Math.floor(Date.now() / 1000)
-  const cutoff = period === 'all' ? 0 : now - INBOX_PERIOD_DAYS[period] * 86400
+  const periodDays = INBOX_PERIOD_DAYS_LOOKUP.get(period) ?? Infinity
+  const cutoff = period === 'all' ? 0 : now - periodDays * 86400
 
   return entries
     .filter((e) => isInboxEntry(e) && (e.createdAt ?? 0) >= cutoff)

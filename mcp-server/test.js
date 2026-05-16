@@ -1,23 +1,34 @@
 import { describe, it, before, after } from 'node:test'
 import assert from 'node:assert/strict'
-import fs from 'node:fs/promises'
-import path from 'node:path'
+import { spawn } from 'node:child_process'
+import {
+  mkdtemp, mkdir, open, rm, writeFile,
+} from 'node:fs/promises'
 import os from 'node:os'
+import path from 'node:path'
+import process from 'node:process'
+import { clearTimeout, setTimeout } from 'node:timers'
+import { fileURLToPath } from 'node:url'
+import { Client } from '@modelcontextprotocol/sdk/client/index.js'
+import { StdioClientTransport } from '@modelcontextprotocol/sdk/client/stdio.js'
 import {
   findMarkdownFiles, getNote, searchNotes, vaultContext,
 } from './vault.js'
+import { requireVaultPath, requireVaultPaths } from './vault-path.js'
+import { vaultContextWithInstructions } from './agent-instructions.js'
 import { evaluateBridgeRequest } from './ws-bridge.js'
 
 let tmpDir
 const ACTIVE_VAULT_ERROR = 'Note path must stay inside the active vault'
+const MCP_SERVER_DIR = path.dirname(fileURLToPath(import.meta.url))
 
 before(async () => {
-  tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), 'laputa-mcp-test-'))
+  tmpDir = await mkdtemp(path.join(os.tmpdir(), 'laputa-mcp-test-'))
 
-  await fs.mkdir(path.join(tmpDir, 'project'), { recursive: true })
-  await fs.mkdir(path.join(tmpDir, 'note'), { recursive: true })
+  await mkdir(path.join(tmpDir, 'project'), { recursive: true })
+  await mkdir(path.join(tmpDir, 'note'), { recursive: true })
 
-  await fs.writeFile(path.join(tmpDir, 'project', 'test-project.md'), `---
+  await writeTextFile(path.join(tmpDir, 'project', 'test-project.md'), `---
 title: Test Project
 is_a: Project
 status: Active
@@ -28,7 +39,7 @@ status: Active
 This is a test project for the MCP server.
 `)
 
-  await fs.writeFile(path.join(tmpDir, 'note', 'daily-log.md'), `---
+  await writeTextFile(path.join(tmpDir, 'note', 'daily-log.md'), `---
 title: Daily Log
 is_a: Note
 ---
@@ -38,7 +49,18 @@ is_a: Note
 Today I worked on the MCP server implementation.
 `)
 
-  await fs.writeFile(path.join(tmpDir, 'project', 'second-project.md'), `---
+  await writeTextFile(path.join(tmpDir, 'note', 'hashtag-tags.md'), `---
+title: Hashtag Tags
+type: Note
+tags: [#abc, def, ghi]
+---
+
+# Hashtag Tags
+
+This note has AI-generated hashtag-style YAML tags.
+`)
+
+  await writeTextFile(path.join(tmpDir, 'project', 'second-project.md'), `---
 title: Second Project
 type: Project
 status: Draft
@@ -53,16 +75,17 @@ Another project for testing list and context.
 })
 
 after(async () => {
-  await fs.rm(tmpDir, { recursive: true, force: true })
+  await rm(tmpDir, { recursive: true, force: true })
 })
 
 describe('findMarkdownFiles', () => {
   it('should find all .md files recursively', async () => {
     const files = await findMarkdownFiles(tmpDir)
-    assert.equal(files.length, 3)
+    assert.equal(files.length, 4)
     assert.ok(files.some(f => f.endsWith('test-project.md')))
     assert.ok(files.some(f => f.endsWith('daily-log.md')))
     assert.ok(files.some(f => f.endsWith('second-project.md')))
+    assert.ok(files.some(f => f.endsWith('hashtag-tags.md')))
   })
 })
 
@@ -73,6 +96,15 @@ describe('getNote', () => {
     assert.equal(note.frontmatter.title, 'Test Project')
     assert.equal(note.frontmatter.is_a, 'Project')
     assert.ok(note.content.includes('test project for the MCP server'))
+  })
+
+  it('should tolerate hashtag-style tags in malformed YAML frontmatter', async () => {
+    const note = await getNote(tmpDir, 'note/hashtag-tags.md')
+    assert.equal(note.path, 'note/hashtag-tags.md')
+    assert.equal(note.frontmatter.title, 'Hashtag Tags')
+    assert.equal(note.frontmatter.type, 'Note')
+    assert.deepEqual(note.frontmatter.tags, ['#abc', 'def', 'ghi'])
+    assert.ok(note.content.includes('has AI-generated hashtag-style YAML tags'))
   })
 
   it('should throw for missing notes', async () => {
@@ -131,6 +163,14 @@ describe('vaultContext', () => {
     assert.ok(ctx.types.includes('Note'))
   })
 
+  it('should include notes with hashtag-style tags in malformed YAML frontmatter', async () => {
+    const ctx = await vaultContext(tmpDir)
+    const note = ctx.recentNotes.find(entry => entry.path === 'note/hashtag-tags.md')
+    assert.ok(note)
+    assert.equal(note.title, 'Hashtag Tags')
+    assert.equal(note.type, 'Note')
+  })
+
   it('should cap recent notes at 20', async () => {
     const ctx = await vaultContext(tmpDir)
     assert.ok(ctx.recentNotes.length <= 20)
@@ -152,7 +192,27 @@ describe('vaultContext', () => {
 
   it('should report correct note count', async () => {
     const ctx = await vaultContext(tmpDir)
-    assert.equal(ctx.noteCount, 3)
+    assert.equal(ctx.noteCount, 4)
+  })
+
+  it('includes root AGENTS.md instructions when present', async () => {
+    const agentsPath = path.join(tmpDir, 'AGENTS.md')
+    await writeFile(agentsPath, '# Vault Rules\n\nUse this vault carefully.\n', 'utf-8')
+
+    try {
+      const ctx = await vaultContextWithInstructions(tmpDir)
+      assert.deepEqual(ctx.agentInstructions, {
+        path: agentsPath,
+        content: '# Vault Rules\n\nUse this vault carefully.\n',
+      })
+    } finally {
+      await rm(agentsPath, { force: true })
+    }
+  })
+
+  it('reports null agent instructions when AGENTS.md is absent', async () => {
+    const ctx = await vaultContextWithInstructions(tmpDir)
+    assert.equal(ctx.agentInstructions, null)
   })
 })
 
@@ -191,17 +251,197 @@ describe('evaluateBridgeRequest', () => {
   })
 })
 
+describe('requireVaultPath', () => {
+  it('returns the explicit configured vault path', () => {
+    assert.equal(
+      requireVaultPath({ VAULT_PATH: '/tmp/Selected Vault' }),
+      '/tmp/Selected Vault',
+    )
+  })
+
+  it('rejects missing vault paths instead of falling back to ~/Laputa', async () => {
+    const configDir = await mkdtemp(path.join(os.tmpdir(), 'tolaria-mcp-empty-config-'))
+    assert.throws(
+      () => requireVaultPaths({}, { configDir }),
+      /VAULT_PATH is required/,
+    )
+    await rm(configDir, { recursive: true, force: true })
+  })
+
+  it('returns all configured active vault paths with the primary vault first', () => {
+    assert.deepEqual(
+      requireVaultPaths({
+        VAULT_PATH: '/tmp/Default Vault',
+        VAULT_PATHS: JSON.stringify(['/tmp/Default Vault', '/tmp/Second Vault']),
+      }),
+      ['/tmp/Default Vault', '/tmp/Second Vault'],
+    )
+  })
+
+  it('loads active mounted vault paths from Tolaria config when env is vault-neutral', async () => {
+    const configDir = await mkdtemp(path.join(os.tmpdir(), 'tolaria-mcp-config-'))
+    const primaryVault = path.join(configDir, 'Primary Vault')
+    const secondaryVault = path.join(configDir, 'Secondary Vault')
+    const hiddenVault = path.join(configDir, 'Hidden Vault')
+    const configPath = path.join(configDir, 'com.tolaria.app', 'vaults.json')
+
+    await mkdir(path.dirname(configPath), { recursive: true })
+    await writeFile(configPath, JSON.stringify({
+      active_vault: primaryVault,
+      vaults: [
+        { label: 'Secondary', path: secondaryVault, mounted: true },
+        { label: 'Hidden', path: hiddenVault, mounted: false },
+        { label: 'Primary', path: primaryVault, mounted: true },
+      ],
+    }), 'utf-8')
+
+    try {
+      assert.deepEqual(
+        requireVaultPaths({}, { configDir }),
+        [primaryVault, secondaryVault],
+      )
+    } finally {
+      await rm(configDir, { recursive: true, force: true })
+    }
+  })
+})
+
+describe('stdio process lifecycle', () => {
+  it('advertises local vault tools as approval-safe for MCP clients', async () => {
+    const { client, stderr } = await connectMcpClient()
+
+    try {
+      const { tools } = await client.listTools()
+      const toolsByName = new Map(tools.map(tool => [tool.name, tool]))
+      const safeReadTools = [
+        'search_notes',
+        'get_vault_context',
+        'list_vaults',
+        'get_note',
+        'open_note',
+        'highlight_editor',
+        'refresh_vault',
+      ]
+
+      for (const name of safeReadTools) {
+        const tool = toolsByName.get(name)
+        assert.ok(tool, `Missing MCP tool: ${name}`)
+        assert.equal(tool.annotations?.readOnlyHint, true, `${name} should not require destructive approval`)
+        assert.equal(tool.annotations?.destructiveHint, false, `${name} should not be treated as destructive`)
+        assert.equal(tool.annotations?.openWorldHint, false, `${name} should stay scoped to local active vaults`)
+      }
+    } finally {
+      await closeMcpClient(client, stderr)
+    }
+  })
+
+  it('exits when the MCP client closes stdin', async () => {
+    const child = spawn(process.execPath, ['index.js'], {
+      cwd: MCP_SERVER_DIR,
+      env: { ...process.env, VAULT_PATH: tmpDir, WS_UI_PORT: '65534' },
+      stdio: ['pipe', 'ignore', 'pipe'],
+    })
+    let stderr = ''
+    child.stderr.setEncoding('utf8')
+    child.stderr.on('data', chunk => {
+      stderr += chunk
+    })
+
+    await sleep(200)
+    child.stdin.end()
+
+    const exit = await waitForExit(child, 1_500)
+    if (!exit) {
+      child.kill()
+      await waitForExit(child, 1_000)
+      assert.fail(`MCP server stayed alive after stdin closed.\n${stderr}`)
+    }
+
+    assert.equal(exit.signal, null)
+    assert.equal(exit.code, 0, stderr)
+  })
+})
+
+async function connectMcpClient() {
+  const transport = new StdioClientTransport({
+    command: process.execPath,
+    args: ['index.js'],
+    cwd: MCP_SERVER_DIR,
+    env: { ...process.env, VAULT_PATH: tmpDir, WS_UI_PORT: '65534' },
+    stderr: 'pipe',
+  })
+  const stderr = collectTransportStderr(transport)
+  const client = new Client(
+    { name: 'tolaria-mcp-test-client', version: '0.0.0' },
+    { capabilities: {} },
+  )
+
+  await client.connect(transport)
+  return { client, stderr }
+}
+
+function collectTransportStderr(transport) {
+  const chunks = []
+  transport.stderr?.setEncoding('utf8')
+  transport.stderr?.on('data', chunk => {
+    chunks.push(chunk)
+  })
+  return () => chunks.join('')
+}
+
+async function closeMcpClient(client, stderr) {
+  try {
+    await client.close()
+  } catch (error) {
+    assert.fail(`Failed to close MCP test client: ${error.message}\n${stderr()}`)
+  }
+}
+
 async function assertRejectsOutsideVault(prefix, resolveNotePath) {
-  const outsideDir = await fs.mkdtemp(path.join(os.tmpdir(), prefix))
+  const outsideDir = await mkdtemp(path.join(os.tmpdir(), prefix))
   const outsideNote = path.join(outsideDir, 'outside.md')
 
   try {
-    await fs.writeFile(outsideNote, '# Outside\n')
+    await writeTextFile(outsideNote, '# Outside\n')
     await assert.rejects(
       () => getNote(tmpDir, resolveNotePath(outsideNote)),
       { message: ACTIVE_VAULT_ERROR },
     )
   } finally {
-    await fs.rm(outsideDir, { recursive: true, force: true })
+    await rm(outsideDir, { recursive: true, force: true })
   }
+}
+
+async function writeTextFile(filePath, content) {
+  const handle = await open(filePath, 'w')
+  try {
+    await handle.writeFile(content, 'utf-8')
+  } finally {
+    await handle.close()
+  }
+}
+
+function sleep(ms) {
+  return new Promise(resolve => setTimeout(resolve, ms))
+}
+
+function waitForExit(child, timeoutMs) {
+  return new Promise((resolve) => {
+    const timer = setTimeout(() => {
+      cleanup()
+      resolve(null)
+    }, timeoutMs)
+
+    child.once('exit', onExit)
+
+    function onExit(code, signal) {
+      cleanup()
+      resolve({ code, signal })
+    }
+
+    function cleanup() {
+      clearTimeout(timer)
+      child.off('exit', onExit)
+    }
+  })
 }

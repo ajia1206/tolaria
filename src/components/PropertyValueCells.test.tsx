@@ -115,6 +115,7 @@ vi.mock('@/components/ui/popover', () => ({
 }))
 
 import { DisplayModeSelector, SmartPropertyValueCell } from './PropertyValueCells'
+import { AppPreferencesProvider } from '../hooks/useAppPreferences'
 
 describe('PropertyValueCells', () => {
   it('shows the relationship icon and resets to auto mode when the auto option is selected', () => {
@@ -265,19 +266,23 @@ describe('PropertyValueCells', () => {
     expect(onStartEdit).toHaveBeenCalledWith(null)
 
     rerender(
-      <SmartPropertyValueCell
-        propKey="Due"
-        value="2026-04-20"
-        displayMode="date"
-        isEditing={true}
-        vaultStatuses={[]}
-        vaultTags={[]}
-        onStartEdit={onStartEdit}
-        onSave={onSave}
-        onSaveList={onSaveList}
-      />,
+      <AppPreferencesProvider dateDisplayFormat="european">
+        <SmartPropertyValueCell
+          propKey="Due"
+          value="2026-04-20"
+          displayMode="date"
+          isEditing={true}
+          vaultStatuses={[]}
+          vaultTags={[]}
+          onStartEdit={onStartEdit}
+          onSave={onSave}
+          onSaveList={onSaveList}
+        />
+      </AppPreferencesProvider>,
     )
 
+    expect(screen.getByTestId('date-display')).toHaveTextContent('20/4/2026')
+    expect(screen.getByTestId('date-picker-input')).toHaveValue('2026-04-20')
     fireEvent.click(screen.getByTestId('date-picker-calendar'))
     expect(onSave).toHaveBeenCalledWith('Due', '2026-04-22')
 

@@ -1,4 +1,5 @@
-import { createElement } from 'react'
+import { Fragment, createElement } from 'react'
+import type { CSSProperties } from 'react'
 import type { VaultEntry } from '../types'
 import { getTypeColor, getTypeLightColor } from '../utils/typeColors'
 import { NoteTitleIcon } from './NoteTitleIcon'
@@ -158,11 +159,13 @@ export function InlineWikilinkEditorField({
   inputRef,
   dataTestId,
   editorClassName,
-  onBeforeInput,
+  editorStyle,
   onCompositionEnd,
   onCompositionStart,
   onInput,
   onKeyDown,
+  onCut,
+  onDrop,
   onPaste,
   onSelectionChange,
   segments,
@@ -174,11 +177,13 @@ export function InlineWikilinkEditorField({
   inputRef: React.Ref<HTMLDivElement>
   dataTestId: string
   editorClassName?: string
-  onBeforeInput: (event: React.FormEvent<HTMLDivElement>) => void
+  editorStyle?: CSSProperties
   onCompositionEnd: () => void
   onCompositionStart: () => void
   onInput: () => void
   onKeyDown: (event: React.KeyboardEvent<HTMLDivElement>) => void
+  onCut: (event: React.ClipboardEvent<HTMLDivElement>) => void
+  onDrop: (event: React.DragEvent<HTMLDivElement>) => void
   onPaste: (event: React.ClipboardEvent<HTMLDivElement>) => void
   onSelectionChange: () => void
   segments: InlineWikilinkSegment[]
@@ -201,7 +206,7 @@ export function InlineWikilinkEditorField({
         contentEditable={!disabled}
         suppressContentEditableWarning={true}
         role="textbox"
-        aria-multiline="false"
+        aria-multiline="true"
         aria-disabled={disabled || undefined}
         aria-placeholder={placeholder}
         data-testid={dataTestId}
@@ -210,20 +215,21 @@ export function InlineWikilinkEditorField({
           disabled && 'cursor-not-allowed opacity-60',
           editorClassName,
         )}
-        onBeforeInput={onBeforeInput}
         onCompositionEnd={onCompositionEnd}
         onCompositionStart={onCompositionStart}
         onInput={onInput}
         onKeyDown={onKeyDown}
+        onCut={onCut}
+        onDrop={onDrop}
         onPaste={onPaste}
         onClick={onSelectionChange}
         onKeyUp={onSelectionChange}
         onMouseUp={onSelectionChange}
-        style={{ whiteSpace: 'pre-wrap', wordBreak: 'break-word' }}
+        style={{ ...editorStyle, whiteSpace: 'pre-wrap', wordBreak: 'break-word' }}
       >
         {segments.map((segment, index) => (
           segment.kind === 'text'
-            ? <span key={`text-${index}`}>{segment.text}</span>
+            ? <Fragment key={`text-${index}`}>{segment.text}</Fragment>
             : (
                 <InlineWikilinkChipView
                   key={`chip-${segment.chip.entry.path}-${segment.chip.target}`}

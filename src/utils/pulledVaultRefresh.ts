@@ -1,9 +1,12 @@
 import type { VaultEntry } from '../types'
+import { findByNotePath, joinVaultPath, normalizeNotePathForIdentity, notePathsMatch } from './notePathIdentity'
 
 interface PulledVaultRefreshOptions {
   activeTabPath: string | null
+  getActiveTabPath?: () => string | null
   closeAllTabs: () => void
   hasUnsavedChanges: (path: string) => boolean
+  shouldKeepActiveEditorMounted?: () => boolean
   reloadFolders: () => Promise<unknown> | unknown
   reloadVault: () => Promise<VaultEntry[]>
   reloadViews: () => Promise<unknown> | unknown
@@ -12,28 +15,91 @@ interface PulledVaultRefreshOptions {
   vaultPath: string
 }
 
-function normalizePath(path: string): string {
-  return path
-    .replaceAll('\\', '/')
-    .replace(/^\/private\/tmp(?=\/|$)/u, '/tmp')
-    .replace(/\/+$/u, '')
+function resolveUpdatedFilePath(options: { path: string; vaultPath: string }): string {
+  const { path, vaultPath } = options
+  if (path.startsWith('/')) return normalizeNotePathForIdentity(path)
+  return normalizeNotePathForIdentity(joinVaultPath(vaultPath, path))
 }
 
-function resolveUpdatedFilePath(path: string, vaultPath: string): string {
-  if (path.startsWith('/')) return normalizePath(path)
-  return normalizePath(`${vaultPath}/${path}`)
+function didPullUpdateActiveNote(options: {
+  updatedFiles: string[]
+  vaultPath: string
+  activeTabPath: string
+}): boolean {
+  const { activeTabPath, updatedFiles, vaultPath } = options
+  return updatedFiles.some((path) => notePathsMatch(resolveUpdatedFilePath({ path, vaultPath }), activeTabPath))
 }
 
-function didPullUpdateActiveNote(updatedFiles: string[], vaultPath: string, activeTabPath: string): boolean {
-  const normalizedActivePath = normalizePath(activeTabPath)
-  return updatedFiles.some((path) => resolveUpdatedFilePath(path, vaultPath) === normalizedActivePath)
+function didActivePathChange(options: { initialPath: string; latestPath: string }): boolean {
+  const { initialPath, latestPath } = options
+  return !notePathsMatch(initialPath, latestPath)
+}
+
+function findExternallyMovedActiveEntry(options: {
+  activeTabPath: string
+  entries: VaultEntry[]
+  updatedFiles: string[]
+  vaultPath: string
+}): VaultEntry | null {
+  const { activeTabPath, entries, updatedFiles, vaultPath } = options
+  if (updatedFiles.length === 0) return null
+  const activeFilename = normalizeNotePathForIdentity(activeTabPath).split('/').pop()
+  const updatedPaths = new Set(updatedFiles.map((path) => resolveUpdatedFilePath({ path, vaultPath })))
+  const candidates = entries.filter((entry) =>
+    !notePathsMatch(entry.path, activeTabPath)
+    && entry.filename === activeFilename
+    && updatedPaths.has(normalizeNotePathForIdentity(entry.path)),
+  )
+
+  const [candidate] = candidates
+  return candidates.length === 1 && candidate ? candidate : null
+}
+
+function isActivePathBlocked(options: {
+  activeTabPath: string | null
+  latestActiveTabPath: string | null
+  hasUnsavedChanges: PulledVaultRefreshOptions['hasUnsavedChanges']
+}): boolean {
+  const { activeTabPath, latestActiveTabPath, hasUnsavedChanges } = options
+  if (!activeTabPath) return true
+  if (!latestActiveTabPath) return true
+  if (didActivePathChange({ initialPath: activeTabPath, latestPath: latestActiveTabPath })) return true
+  return hasUnsavedChanges(latestActiveTabPath)
+}
+
+function shouldReplaceActiveEntry(options: {
+  activePath: string
+  movedEntry: VaultEntry | null
+  refreshedEntry: VaultEntry | null
+  shouldKeepActiveEditorMounted?: () => boolean
+  updatedFiles: string[]
+  vaultPath: string
+}): boolean {
+  const {
+    activePath,
+    movedEntry,
+    refreshedEntry,
+    shouldKeepActiveEditorMounted,
+    updatedFiles,
+    vaultPath,
+  } = options
+  if (movedEntry) return true
+  if (!refreshedEntry) return false
+  if (shouldKeepActiveEditorMounted?.() === true) return false
+  return didPullUpdateActiveNote({ updatedFiles, vaultPath, activeTabPath: activePath })
+}
+
+export function getPulledVaultUpdateOptions(): { preserveFocusedEditor: true } {
+  return { preserveFocusedEditor: true }
 }
 
 export async function refreshPulledVaultState(options: PulledVaultRefreshOptions): Promise<VaultEntry[]> {
   const {
     activeTabPath,
     closeAllTabs,
+    getActiveTabPath,
     hasUnsavedChanges,
+    shouldKeepActiveEditorMounted,
     reloadFolders,
     reloadVault,
     reloadViews,
@@ -48,21 +114,32 @@ export async function refreshPulledVaultState(options: PulledVaultRefreshOptions
     Promise.resolve(reloadViews()),
   ])
 
-  if (!activeTabPath || hasUnsavedChanges(activeTabPath)) return entries
+  const latestActiveTabPath = getActiveTabPath?.() ?? activeTabPath
+  if (isActivePathBlocked({ activeTabPath, latestActiveTabPath, hasUnsavedChanges })) return entries
 
-  const refreshedEntry = entries.find(entry => normalizePath(entry.path) === normalizePath(activeTabPath))
-  if (!refreshedEntry) {
+  const activePath = latestActiveTabPath as string
+  const refreshedEntry = findByNotePath(entries, activePath) ?? null
+  const movedEntry = refreshedEntry ? null : findExternallyMovedActiveEntry({
+    activeTabPath: activePath,
+    entries,
+    updatedFiles,
+    vaultPath,
+  })
+  const replacementEntry = refreshedEntry ?? movedEntry
+
+  if (replacementEntry && shouldReplaceActiveEntry({
+    activePath,
+    movedEntry,
+    refreshedEntry,
+    shouldKeepActiveEditorMounted,
+    updatedFiles,
+    vaultPath,
+  })) {
     closeAllTabs()
+    await replaceActiveTab(replacementEntry)
     return entries
   }
 
-  // Native BlockNote can keep rendering the previous document after a pull that
-  // changes the active file in place. Dropping the tab first forces a full
-  // reopen for that specific case without affecting unrelated pull updates.
-  if (didPullUpdateActiveNote(updatedFiles, vaultPath, activeTabPath)) {
-    closeAllTabs()
-  }
-
-  await replaceActiveTab(refreshedEntry)
+  if (!replacementEntry) closeAllTabs()
   return entries
 }

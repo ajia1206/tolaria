@@ -1,11 +1,12 @@
+import { Check, CircleNotch as Loader2, FileText, Warning as AlertTriangle } from '@phosphor-icons/react'
 import { useCallback, useEffect, useRef, useState, type KeyboardEvent } from 'react'
-import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter, DialogDescription } from '@/components/ui/dialog'
 import { Button } from '@/components/ui/button'
-import { AlertTriangle, FileText, Check, Loader2 } from 'lucide-react'
+import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from '@/components/ui/dialog'
 import type { ConflictFileState } from '../hooks/useConflictResolver'
 import { cn } from '@/lib/utils'
 
 type ConflictResolutionStrategy = 'ours' | 'theirs'
+type ConflictResolution = NonNullable<ConflictFileState['resolution']>
 
 const BINARY_FILE_EXTENSIONS = [
   '.png',
@@ -29,11 +30,14 @@ const BINARY_FILE_EXTENSIONS = [
   '.eot',
 ]
 
-const RESOLUTION_LABELS: Record<NonNullable<ConflictFileState['resolution']>, string> = {
+const RESOLUTION_LABELS: Record<ConflictResolution, string> = {
   manual: 'Edited manually',
   ours: 'Keeping mine',
   theirs: 'Keeping theirs',
 }
+const RESOLUTION_LABELS_BY_VALUE = new Map<ConflictResolution, string>(
+  Object.entries(RESOLUTION_LABELS) as Array<[ConflictResolution, string]>,
+)
 
 const RESOLUTION_SHORTCUTS: Record<string, ConflictResolutionStrategy | undefined> = {
   k: 'ours',
@@ -65,7 +69,7 @@ function ResolutionLabel({ resolution }: { resolution: ConflictFileState['resolu
   if (!resolution) return null
   return (
     <span className="flex items-center gap-1 text-xs text-[var(--feedback-success-text)]">
-      <Check size={12} />{RESOLUTION_LABELS[resolution]}
+      <Check size={12} />{RESOLUTION_LABELS_BY_VALUE.get(resolution)}
     </span>
   )
 }
@@ -388,7 +392,7 @@ function ConflictResolverDialogContent({
     if (handleNavigationKey(e, moveFocus)) return
 
     const focusedIndex = clampFocusIndex(focusIdxRef.current, fileStates.length)
-    const file = fileStates[focusedIndex]
+    const file = fileStates.at(focusedIndex)
     if (handleResolutionShortcut(e, file, onResolveFile)) return
     if (handleOpenShortcut(e, file, onOpenInEditor)) return
     handleCommitShortcut({ allResolved, committing, event: e, onCommit })

@@ -1,5 +1,9 @@
 import { isTauri } from '../mock-tauri'
 import { getAiAgentDefinition, type AiAgentId } from '../lib/aiAgents'
+import {
+  normalizeAiAgentPermissionMode,
+  type AiAgentPermissionMode,
+} from '../lib/aiAgentPermissionMode'
 
 type AiAgentStreamEvent =
   | { kind: 'Init'; session_id: string }
@@ -24,15 +28,19 @@ export interface StreamAiAgentRequest {
   message: string
   systemPrompt?: string
   vaultPath: string
+  vaultPaths?: string[]
+  permissionMode?: AiAgentPermissionMode
   callbacks: AgentStreamCallbacks
 }
 
+const CONVERSATION_HISTORY_OPEN_MARKER = ['<', 'conversation_history', '>'].join('')
+
 function mockAgentResponse(agent: AiAgentId, message: string): string {
   const agentLabel = getAiAgentDefinition(agent).label
-  if (message.includes('<conversation_history>')) {
+  if (message.indexOf(CONVERSATION_HISTORY_OPEN_MARKER) >= 0) {
     const allUserLines = message.match(/\[user\]: .+/g) ?? []
     const turnCount = allUserLines.length
-    const lastLine = allUserLines[allUserLines.length - 1] ?? ''
+    const lastLine = allUserLines.at(-1) ?? ''
     const lastUserMsg = lastLine.replace('[user]: ', '')
     return `[mock-${agentLabel.toLowerCase()} turns=${turnCount}] You asked: "${lastUserMsg}" — This note is related to [[Build Laputa App]] and [[Matteo Cellini]].`
   }
@@ -70,6 +78,8 @@ export async function streamAiAgent(
     message,
     systemPrompt,
     vaultPath,
+    vaultPaths,
+    permissionMode,
     callbacks,
   } = request
 
@@ -107,6 +117,8 @@ export async function streamAiAgent(
         message,
         system_prompt: systemPrompt || null,
         vault_path: vaultPath,
+        vault_paths: vaultPaths && vaultPaths.length > 0 ? vaultPaths : null,
+        permission_mode: normalizeAiAgentPermissionMode(permissionMode),
       },
     })
     closeStream()

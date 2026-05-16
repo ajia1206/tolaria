@@ -1,6 +1,17 @@
 import { APP_COMMAND_IDS, getAppCommandShortcutDisplay } from '../appCommandCatalog'
 import type { CommandAction } from './types'
 import { rememberFeedbackDialogOpener } from '../../lib/feedbackDialogOpener'
+import { requestGitignoredVisibilityToggle } from '../../lib/gitignoredVisibilityEvents'
+import {
+  APP_LOCALES,
+  SYSTEM_UI_LANGUAGE,
+  createTranslator,
+  localeDisplayName,
+  localeSearchKeywords,
+  type AppLocale,
+  type UiLanguagePreference,
+} from '../../lib/i18n'
+import type { ThemeMode } from '../../lib/themeMode'
 
 interface SettingsCommandsConfig {
   mcpStatus?: string
@@ -16,18 +27,38 @@ interface SettingsCommandsConfig {
   onInstallMcp?: () => void
   onReloadVault?: () => void
   onRepairVault?: () => void
+  onToggleGitignoredFilesVisibility?: () => void
+  locale?: AppLocale
+  systemLocale?: AppLocale
+  selectedUiLanguage?: UiLanguagePreference
+  onSetUiLanguage?: (language: UiLanguagePreference) => void
+  onSetThemeMode?: (mode: ThemeMode) => void
+}
+
+function commandKeywords(raw: string): string[] {
+  return raw.split(/\s+/).filter(Boolean)
 }
 
 function buildPrimarySettingsCommands({
+  locale = 'en',
   onOpenSettings,
   onOpenFeedback,
   onCheckForUpdates,
-}: Pick<SettingsCommandsConfig, 'onOpenSettings' | 'onOpenFeedback' | 'onCheckForUpdates'>): CommandAction[] {
+}: Pick<SettingsCommandsConfig, 'locale' | 'onOpenSettings' | 'onOpenFeedback' | 'onCheckForUpdates'>): CommandAction[] {
+  const t = createTranslator(locale)
   return [
-    { id: 'open-settings', label: 'Open Settings', group: 'Settings', shortcut: getAppCommandShortcutDisplay(APP_COMMAND_IDS.appSettings), keywords: ['preferences', 'config'], enabled: true, execute: onOpenSettings },
+    {
+      id: 'open-settings',
+      label: t('command.openSettings'),
+      group: 'Settings',
+      shortcut: getAppCommandShortcutDisplay(APP_COMMAND_IDS.appSettings),
+      keywords: commandKeywords(t('command.openSettings.keywords')),
+      enabled: true,
+      execute: onOpenSettings,
+    },
     {
       id: 'open-h1-auto-rename-setting',
-      label: 'Open H1 Auto-Rename Setting',
+      label: t('command.openH1Setting'),
       group: 'Settings',
       keywords: ['h1', 'title', 'filename', 'rename', 'auto', 'untitled', 'sync', 'preference'],
       enabled: true,
@@ -35,7 +66,7 @@ function buildPrimarySettingsCommands({
     },
     {
       id: 'open-contribute',
-      label: 'Contribute',
+      label: t('command.contribute'),
       group: 'Settings',
       keywords: ['contribute', 'feedback', 'feature', 'canny', 'discussion', 'github', 'bug', 'report'],
       enabled: !!onOpenFeedback,
@@ -44,7 +75,86 @@ function buildPrimarySettingsCommands({
         onOpenFeedback?.()
       },
     },
-    { id: 'check-updates', label: 'Check for Updates', group: 'Settings', keywords: ['update', 'version', 'upgrade', 'release'], enabled: true, execute: () => onCheckForUpdates?.() },
+    { id: 'check-updates', label: t('command.checkUpdates'), group: 'Settings', keywords: ['update', 'version', 'upgrade', 'release'], enabled: true, execute: () => onCheckForUpdates?.() },
+  ]
+}
+
+function buildLanguageCommands({
+  locale = 'en',
+  systemLocale = locale,
+  selectedUiLanguage = SYSTEM_UI_LANGUAGE,
+  onOpenSettings,
+  onSetUiLanguage,
+}: Pick<SettingsCommandsConfig, 'locale' | 'systemLocale' | 'selectedUiLanguage' | 'onOpenSettings' | 'onSetUiLanguage'>): CommandAction[] {
+  const t = createTranslator(locale)
+  const canSwitchLanguage = !!onSetUiLanguage
+
+  return [
+    {
+      id: 'open-language-settings',
+      label: t('command.openLanguageSettings'),
+      group: 'Settings',
+      keywords: commandKeywords(t('command.openLanguageSettings.keywords')),
+      enabled: true,
+      execute: onOpenSettings,
+    },
+    {
+      id: 'use-system-language',
+      label: `${t('command.useSystemLanguage')} (${localeDisplayName(systemLocale, locale)})`,
+      group: 'Settings',
+      keywords: ['language', 'locale', 'system', 'auto'],
+      enabled: canSwitchLanguage && selectedUiLanguage !== SYSTEM_UI_LANGUAGE,
+      execute: () => onSetUiLanguage?.(SYSTEM_UI_LANGUAGE),
+    },
+    ...APP_LOCALES.map((targetLocale) => ({
+      id: `switch-language-${targetLocale.toLowerCase()}`,
+      label: t('command.switchLanguage', {
+        language: localeDisplayName(targetLocale, locale),
+      }),
+      group: 'Settings' as const,
+      keywords: [
+        'language',
+        'locale',
+        ...localeSearchKeywords(targetLocale),
+      ],
+      enabled: canSwitchLanguage && selectedUiLanguage !== targetLocale,
+      execute: () => onSetUiLanguage?.(targetLocale),
+    })),
+  ]
+}
+
+function buildThemeCommands({
+  locale = 'en',
+  onSetThemeMode,
+}: Pick<SettingsCommandsConfig, 'locale' | 'onSetThemeMode'>): CommandAction[] {
+  const t = createTranslator(locale)
+  const canSetThemeMode = !!onSetThemeMode
+
+  return [
+    {
+      id: 'use-light-mode',
+      label: t('command.settings.useLightMode'),
+      group: 'Settings',
+      keywords: ['theme', 'appearance', 'light', 'light mode', 'day'],
+      enabled: canSetThemeMode,
+      execute: () => onSetThemeMode?.('light'),
+    },
+    {
+      id: 'use-dark-mode',
+      label: t('command.settings.useDarkMode'),
+      group: 'Settings',
+      keywords: ['theme', 'appearance', 'dark', 'dark mode', 'night'],
+      enabled: canSetThemeMode,
+      execute: () => onSetThemeMode?.('dark'),
+    },
+    {
+      id: 'use-system-theme-mode',
+      label: t('command.settings.useSystemTheme'),
+      group: 'Settings',
+      keywords: ['theme', 'appearance', 'system', 'system theme', 'auto'],
+      enabled: canSetThemeMode,
+      execute: () => onSetThemeMode?.('system'),
+    },
   ]
 }
 
@@ -69,15 +179,24 @@ function buildMaintenanceCommands({
   onInstallMcp,
   onReloadVault,
   onRepairVault,
-}: Pick<SettingsCommandsConfig, 'mcpStatus' | 'onInstallMcp' | 'onReloadVault' | 'onRepairVault'>): CommandAction[] {
+  onToggleGitignoredFilesVisibility,
+}: Pick<SettingsCommandsConfig, 'mcpStatus' | 'onInstallMcp' | 'onReloadVault' | 'onRepairVault' | 'onToggleGitignoredFilesVisibility'>): CommandAction[] {
   return [
     {
       id: 'install-mcp',
       label: mcpStatus === 'installed' ? 'Manage External AI Tools…' : 'Set Up External AI Tools…',
       group: 'Settings',
-      keywords: ['mcp', 'ai', 'tools', 'external', 'setup', 'connect', 'disconnect', 'claude', 'codex', 'cursor', 'consent'],
+      keywords: ['mcp', 'ai', 'tools', 'external', 'setup', 'details', 'copy', 'export', 'manual', 'config', 'connect', 'disconnect', 'claude', 'gemini', 'codex', 'cursor', 'consent'],
       enabled: true,
       execute: () => onInstallMcp?.(),
+    },
+    {
+      id: 'toggle-gitignored-files-visibility',
+      label: 'Toggle Gitignored Files Visibility',
+      group: 'Settings',
+      keywords: ['gitignore', 'ignored', 'files', 'folders', 'visibility', 'hide', 'show', 'generated', 'local'],
+      enabled: true,
+      execute: onToggleGitignoredFilesVisibility ?? requestGitignoredVisibilityToggle,
     },
     { id: 'reload-vault', label: 'Reload Vault', group: 'Settings', keywords: ['reload', 'refresh', 'rescan', 'sync', 'filesystem', 'cache'], enabled: !!onReloadVault, execute: () => onReloadVault?.() },
     { id: 'repair-vault', label: 'Repair Vault', group: 'Settings', keywords: ['repair', 'fix', 'restore', 'config', 'agents', 'themes', 'missing', 'reset', 'flatten', 'structure'], enabled: !!onRepairVault, execute: () => onRepairVault?.() },
@@ -88,11 +207,20 @@ export function buildSettingsCommands(config: SettingsCommandsConfig): CommandAc
   const {
     mcpStatus, vaultCount, isGettingStartedHidden,
     onOpenSettings, onOpenFeedback, onOpenVault, onCreateEmptyVault, onRemoveActiveVault, onRestoreGettingStarted,
-    onCheckForUpdates, onInstallMcp, onReloadVault, onRepairVault,
+    onCheckForUpdates, onInstallMcp, onReloadVault, onRepairVault, onToggleGitignoredFilesVisibility,
+    locale = 'en', systemLocale = locale, selectedUiLanguage = SYSTEM_UI_LANGUAGE, onSetUiLanguage, onSetThemeMode,
   } = config
 
   return [
-    ...buildPrimarySettingsCommands({ onOpenSettings, onOpenFeedback, onCheckForUpdates }),
+    ...buildPrimarySettingsCommands({ locale, onOpenSettings, onOpenFeedback, onCheckForUpdates }),
+    ...buildThemeCommands({ locale, onSetThemeMode }),
+    ...buildLanguageCommands({
+      locale,
+      systemLocale,
+      selectedUiLanguage,
+      onOpenSettings,
+      onSetUiLanguage,
+    }),
     ...buildVaultSettingsCommands({
       vaultCount,
       isGettingStartedHidden,
@@ -101,6 +229,12 @@ export function buildSettingsCommands(config: SettingsCommandsConfig): CommandAc
       onRemoveActiveVault,
       onRestoreGettingStarted,
     }),
-    ...buildMaintenanceCommands({ mcpStatus, onInstallMcp, onReloadVault, onRepairVault }),
+    ...buildMaintenanceCommands({
+      mcpStatus,
+      onInstallMcp,
+      onReloadVault,
+      onRepairVault,
+      onToggleGitignoredFilesVisibility,
+    }),
   ]
 }

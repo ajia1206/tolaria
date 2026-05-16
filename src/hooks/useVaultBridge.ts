@@ -11,8 +11,10 @@ interface VaultBridgeDeps {
   closeAllTabs: () => void
   replaceActiveTab: (entry: VaultEntry) => Promise<void>
   hasUnsavedChanges: (path: string) => boolean
+  shouldKeepActiveEditorMounted?: () => boolean
   onSelectNote: (entry: VaultEntry) => void
   activeTabPath: string | null
+  getActiveTabPath?: () => string | null
 }
 
 function findEntry(entriesByPath: Map<string, VaultEntry>, resolvedPath: string, path: string): VaultEntry | undefined {
@@ -32,8 +34,10 @@ export function useVaultBridge({
   closeAllTabs,
   replaceActiveTab,
   hasUnsavedChanges,
+  shouldKeepActiveEditorMounted,
   onSelectNote,
   activeTabPath,
+  getActiveTabPath,
 }: VaultBridgeDeps) {
   const reloadAndOpen = useCallback((path: string) => {
     reloadVault().then(fresh => {
@@ -46,7 +50,9 @@ export function useVaultBridge({
     refreshPulledVaultState({
       activeTabPath,
       closeAllTabs,
+      getActiveTabPath,
       hasUnsavedChanges,
+      shouldKeepActiveEditorMounted,
       reloadFolders,
       reloadVault,
       reloadViews,
@@ -57,7 +63,9 @@ export function useVaultBridge({
   ), [
     activeTabPath,
     closeAllTabs,
+    getActiveTabPath,
     hasUnsavedChanges,
+    shouldKeepActiveEditorMounted,
     reloadFolders,
     reloadVault,
     reloadViews,

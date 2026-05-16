@@ -1,3 +1,4 @@
+import { Copy, Cube, Monitor, Moon, Sun, X } from '@phosphor-icons/react'
 import {
   AI_AGENT_DEFINITIONS,
   createMissingAiAgentsStatus,
@@ -7,43 +8,92 @@ import {
   type AiAgentsStatus,
 } from '../lib/aiAgents'
 import {
-  useState,
-  useRef,
+  agentTargetId,
+  configuredModelTargets,
+  normalizeAiModelProviders,
+  resolveAiTarget,
+  type AiModelProvider,
+} from '../lib/aiTargets'
+import {
   useCallback,
   useEffect,
+  useRef,
+  useState,
   type KeyboardEvent as ReactKeyboardEvent,
   type MouseEvent as ReactMouseEvent,
   type ReactNode,
 } from 'react'
-import { Moon, Sun, X } from '@phosphor-icons/react'
 import type { Settings } from '../types'
 import {
+  APP_LOCALES,
+  SYSTEM_UI_LANGUAGE,
+  createTranslator,
+  localeDisplayName,
+  resolveEffectiveLocale,
+  serializeUiLanguagePreference,
+  type AppLocale,
+  type UiLanguagePreference,
+} from '../lib/i18n'
+import {
+  applyThemeSelectionToDocument,
   DEFAULT_THEME_MODE,
   readStoredThemeMode,
   type ThemeMode,
+  writeStoredThemeMode,
 } from '../lib/themeMode'
-import type { AppLocale } from '../lib/i18nMessages'
-import { readStoredAppLocale } from '../lib/i18nShared'
-import { useI18n } from '../lib/useI18n'
 import { normalizeReleaseChannel, serializeReleaseChannel, type ReleaseChannel } from '../lib/releaseChannel'
-import { trackEvent } from '../lib/telemetry'
-import { Button } from './ui/button'
-import { Checkbox, type CheckedState } from './ui/checkbox'
-import { Input } from './ui/input'
+import { shouldHideGitignoredFiles } from '../lib/gitignoredVisibility'
+import { areAiFeaturesEnabled } from '../lib/aiFeatures'
+import { trackAllNotesVisibilityChanged } from '../lib/productAnalytics'
+import { AiProviderSettings } from './AiProviderSettings'
+import { PrivacySettingsSection } from './PrivacySettingsSection'
+import { SettingsBodyNav } from './SettingsBodyNav'
 import {
-  Select,
-  SelectContent,
-  SelectItem,
-  SelectTrigger,
-  SelectValue,
-} from './ui/select'
-import { Switch } from './ui/switch'
+  NumberInputControl,
+  SectionHeading,
+  SelectControl,
+  SettingsGroup,
+  SettingsRow,
+  SettingsSection,
+  SettingsSwitchRow,
+} from './SettingsControls'
+import { SettingsFooter } from './SettingsFooter'
+import { VaultContentSettingsSection } from './VaultContentSettingsSection'
+import { WorkspaceSettingsSection } from './WorkspaceSettingsSection'
+import {
+  resolveAllNotesFileVisibility,
+  settingsWithAllNotesFileVisibility,
+  type AllNotesFileVisibility,
+} from '../utils/allNotesFileVisibility'
+import { DEFAULT_NOTE_WIDTH_MODE, normalizeNoteWidthMode } from '../utils/noteWidth'
+import {
+  DEFAULT_DATE_DISPLAY_FORMAT,
+  normalizeDateDisplayFormat,
+  type DateDisplayFormat,
+} from '../utils/dateDisplay'
+import { Button } from './ui/button'
+import { Tabs, TabsContent, TabsList, TabsTrigger } from './ui/tabs'
+import type { NoteWidthMode } from '../types'
+import type { VaultOption } from './status-bar/types'
+import { SETTINGS_SECTION_IDS } from './settingsSectionIds'
+import {
+  trackSettingsPreferenceChanges,
+  trackTelemetryConsentChange,
+} from './settingsPreferenceTracking'
+import { useSettingsPanelAutofocus, useSettingsPanelFocusTrap } from './useSettingsPanelFocus'
 
 interface SettingsPanelProps {
   open: boolean
   settings: Settings
   aiAgentsStatus?: AiAgentsStatus
+  initialSectionId?: string | null
+  locale?: AppLocale
+  systemLocale?: AppLocale
   onSave: (settings: Settings) => void
+  onCopyMcpConfig?: () => void
+  vaults?: VaultOption[]
+  defaultWorkspacePath?: string | null
+  onRemoveVault?: (path: string) => void; onReorderVaults?: (orderedPaths: string[]) => void; onSetDefaultWorkspace?: (path: string) => void; onUpdateWorkspaceIdentity?: (path: string, patch: Partial<VaultOption>) => void
   isGitVault?: boolean
   explicitOrganizationEnabled?: boolean
   onSaveExplicitOrganization?: (enabled: boolean) => void
@@ -56,17 +106,27 @@ interface SettingsDraft {
   autoGitIdleThresholdSeconds: number
   autoGitInactiveThresholdSeconds: number
   autoAdvanceInboxAfterOrganize: boolean
+  aiFeaturesEnabled: boolean
   defaultAiAgent: AiAgentId
+  defaultAiTarget: string
+  aiModelProviders: AiModelProvider[]
   releaseChannel: ReleaseChannel
-  language: AppLocale
   themeMode: ThemeMode
+  uiLanguage: UiLanguagePreference
+  dateDisplayFormat: DateDisplayFormat
+  defaultNoteWidth: NoteWidthMode
+  sidebarTypePluralizationEnabled: boolean
   initialH1AutoRename: boolean
+  hideGitignoredFiles: boolean
+  allNotesFileVisibility: AllNotesFileVisibility
+  multiWorkspaceEnabled: boolean
   crashReporting: boolean
   analytics: boolean
   explicitOrganization: boolean
 }
 
 interface SettingsBodyProps {
+  t: Translate
   pullInterval: number
   setPullInterval: (value: number) => void
   isGitVault: boolean
@@ -78,17 +138,41 @@ interface SettingsBodyProps {
   setAutoGitInactiveThresholdSeconds: (value: number) => void
   autoAdvanceInboxAfterOrganize: boolean
   setAutoAdvanceInboxAfterOrganize: (value: boolean) => void
+  aiFeaturesEnabled: boolean
+  setAiFeaturesEnabled: (value: boolean) => void
   aiAgentsStatus: AiAgentsStatus
   defaultAiAgent: AiAgentId
   setDefaultAiAgent: (value: AiAgentId) => void
+  defaultAiTarget: string
+  setDefaultAiTarget: (value: string) => void
+  aiModelProviders: AiModelProvider[]
+  setAiModelProviders: (value: AiModelProvider[]) => void
+  onCopyMcpConfig?: () => void
   releaseChannel: ReleaseChannel
   setReleaseChannel: (value: ReleaseChannel) => void
-  language: AppLocale
-  setLanguage: (value: AppLocale) => void
   themeMode: ThemeMode
   setThemeMode: (value: ThemeMode) => void
+  uiLanguage: UiLanguagePreference
+  setUiLanguage: (value: UiLanguagePreference) => void
+  dateDisplayFormat: DateDisplayFormat
+  setDateDisplayFormat: (value: DateDisplayFormat) => void
+  defaultNoteWidth: NoteWidthMode
+  setDefaultNoteWidth: (value: NoteWidthMode) => void
+  sidebarTypePluralizationEnabled: boolean
+  setSidebarTypePluralizationEnabled: (value: boolean) => void
+  locale: AppLocale
+  systemLocale: AppLocale
   initialH1AutoRename: boolean
   setInitialH1AutoRename: (value: boolean) => void
+  hideGitignoredFiles: boolean
+  setHideGitignoredFiles: (value: boolean) => void
+  allNotesFileVisibility: AllNotesFileVisibility
+  setAllNotesFileVisibility: (value: AllNotesFileVisibility) => void
+  multiWorkspaceEnabled: boolean
+  setMultiWorkspaceEnabled: (value: boolean) => void
+  vaults: VaultOption[]
+  defaultWorkspacePath?: string | null
+  onRemoveVault?: (path: string) => void; onReorderVaults?: (orderedPaths: string[]) => void; onSetDefaultWorkspace?: (path: string) => void; onUpdateWorkspaceIdentity?: (path: string, patch: Partial<VaultOption>) => void
   explicitOrganization: boolean
   setExplicitOrganization: (value: boolean) => void
   crashReporting: boolean
@@ -100,6 +184,7 @@ interface SettingsBodyProps {
 const PULL_INTERVAL_OPTIONS = [1, 2, 5, 10, 15, 30] as const
 const DEFAULT_AUTOGIT_IDLE_THRESHOLD_SECONDS = 90
 const DEFAULT_AUTOGIT_INACTIVE_THRESHOLD_SECONDS = 30
+type Translate = ReturnType<typeof createTranslator>
 
 function isSaveShortcut(event: ReactKeyboardEvent): boolean {
   return event.key === 'Enter' && (event.metaKey || event.ctrlKey)
@@ -121,21 +206,24 @@ function createSettingsDraft(
       DEFAULT_AUTOGIT_INACTIVE_THRESHOLD_SECONDS,
     ),
     autoAdvanceInboxAfterOrganize: settings.auto_advance_inbox_after_organize ?? false,
+    aiFeaturesEnabled: areAiFeaturesEnabled(settings),
     defaultAiAgent: resolveDefaultAiAgent(settings.default_ai_agent),
+    defaultAiTarget: resolveAiTarget(settings).id,
+    aiModelProviders: normalizeAiModelProviders(settings.ai_model_providers),
     releaseChannel: normalizeReleaseChannel(settings.release_channel),
-    language: resolveSettingsDraftLanguage(settings.ui_language),
     themeMode: resolveSettingsDraftThemeMode(settings.theme_mode),
+    uiLanguage: settings.ui_language ?? SYSTEM_UI_LANGUAGE,
+    dateDisplayFormat: normalizeDateDisplayFormat(settings.date_display_format) ?? DEFAULT_DATE_DISPLAY_FORMAT,
+    defaultNoteWidth: normalizeNoteWidthMode(settings.note_width_mode) ?? DEFAULT_NOTE_WIDTH_MODE,
+    sidebarTypePluralizationEnabled: settings.sidebar_type_pluralization_enabled ?? true,
     initialH1AutoRename: settings.initial_h1_auto_rename_enabled ?? true,
+    hideGitignoredFiles: shouldHideGitignoredFiles(settings),
+    allNotesFileVisibility: resolveAllNotesFileVisibility(settings),
+    multiWorkspaceEnabled: settings.multi_workspace_enabled === true,
     crashReporting: settings.crash_reporting_enabled ?? false,
     analytics: settings.analytics_enabled ?? false,
     explicitOrganization: explicitOrganizationEnabled,
   }
-}
-
-function resolveSettingsDraftLanguage(language: Settings['ui_language']): AppLocale {
-  if (language) return language
-  if (typeof window === 'undefined') return 'en'
-  return readStoredAppLocale(window.localStorage) ?? 'en'
 }
 
 function resolveSettingsDraftThemeMode(themeMode: Settings['theme_mode']): ThemeMode {
@@ -158,7 +246,7 @@ function resolveAnonymousId(settings: Settings, draft: SettingsDraft): string | 
 }
 
 function buildSettingsFromDraft(settings: Settings, draft: SettingsDraft): Settings {
-  return {
+  const nextSettings = {
     auto_pull_interval_minutes: draft.pullInterval,
     autogit_enabled: draft.autoGitEnabled,
     autogit_idle_threshold_seconds: draft.autoGitIdleThresholdSeconds,
@@ -169,20 +257,20 @@ function buildSettingsFromDraft(settings: Settings, draft: SettingsDraft): Setti
     analytics_enabled: draft.analytics,
     anonymous_id: resolveAnonymousId(settings, draft),
     release_channel: serializeReleaseChannel(draft.releaseChannel),
-    ui_language: draft.language,
     theme_mode: draft.themeMode,
+    ui_language: serializeUiLanguagePreference(draft.uiLanguage),
+    date_display_format: draft.dateDisplayFormat,
+    note_width_mode: draft.defaultNoteWidth,
+    sidebar_type_pluralization_enabled: draft.sidebarTypePluralizationEnabled,
     initial_h1_auto_rename_enabled: draft.initialH1AutoRename,
+    ai_features_enabled: draft.aiFeaturesEnabled,
     default_ai_agent: draft.defaultAiAgent,
+    default_ai_target: draft.defaultAiTarget,
+    ai_model_providers: draft.aiModelProviders.length > 0 ? draft.aiModelProviders : null,
+    hide_gitignored_files: draft.hideGitignoredFiles,
+    multi_workspace_enabled: draft.multiWorkspaceEnabled,
   }
-}
-
-function trackTelemetryConsentChange(previousAnalytics: boolean, nextAnalytics: boolean): void {
-  if (!previousAnalytics && nextAnalytics) trackEvent('telemetry_opted_in')
-  if (previousAnalytics && !nextAnalytics) trackEvent('telemetry_opted_out')
-}
-
-function isChecked(checked: CheckedState): boolean {
-  return checked === true
+  return settingsWithAllNotesFileVisibility(nextSettings, draft.allNotesFileVisibility)
 }
 
 function sanitizePositiveInteger(value: number | null | undefined, fallback: number): number {
@@ -190,11 +278,24 @@ function sanitizePositiveInteger(value: number | null | undefined, fallback: num
   return Math.round(value)
 }
 
+function applyThemeModeSelection(value: ThemeMode): void {
+  const matchMedia = typeof window !== 'undefined' ? window.matchMedia?.bind(window) : undefined
+  if (typeof document !== 'undefined') applyThemeSelectionToDocument(document, value, matchMedia)
+  if (typeof window !== 'undefined') writeStoredThemeMode(window.localStorage, value)
+}
+
 export function SettingsPanel({
   open,
   settings,
   aiAgentsStatus = createMissingAiAgentsStatus(),
+  initialSectionId = null,
+  locale = 'en',
+  systemLocale = locale,
   onSave,
+  onCopyMcpConfig,
+  vaults = [],
+  defaultWorkspacePath = null,
+  onRemoveVault, onReorderVaults, onSetDefaultWorkspace, onUpdateWorkspaceIdentity,
   isGitVault = true,
   explicitOrganizationEnabled = true,
   onSaveExplicitOrganization,
@@ -206,7 +307,14 @@ export function SettingsPanel({
     <SettingsPanelInner
       settings={settings}
       aiAgentsStatus={aiAgentsStatus}
+      initialSectionId={initialSectionId}
+      locale={locale}
+      systemLocale={systemLocale}
       onSave={onSave}
+      onCopyMcpConfig={onCopyMcpConfig}
+      vaults={vaults}
+      defaultWorkspacePath={defaultWorkspacePath}
+      {...{ onRemoveVault, onReorderVaults, onSetDefaultWorkspace, onUpdateWorkspaceIdentity }}
       isGitVault={isGitVault}
       explicitOrganizationEnabled={explicitOrganizationEnabled}
       onSaveExplicitOrganization={onSaveExplicitOrganization}
@@ -217,6 +325,9 @@ export function SettingsPanel({
 
 type SettingsPanelInnerProps = Omit<SettingsPanelProps, 'open' | 'explicitOrganizationEnabled' | 'aiAgentsStatus' | 'isGitVault'> & {
   aiAgentsStatus: AiAgentsStatus
+  initialSectionId: string | null
+  locale: AppLocale
+  systemLocale: AppLocale
   isGitVault: boolean
   explicitOrganizationEnabled: boolean
 }
@@ -224,23 +335,37 @@ type SettingsPanelInnerProps = Omit<SettingsPanelProps, 'open' | 'explicitOrgani
 function SettingsPanelInner({
   settings,
   aiAgentsStatus,
+  initialSectionId,
+  systemLocale,
   onSave,
+  onCopyMcpConfig,
+  vaults,
+  defaultWorkspacePath,
+  onRemoveVault, onReorderVaults, onSetDefaultWorkspace, onUpdateWorkspaceIdentity,
   isGitVault,
   explicitOrganizationEnabled,
   onSaveExplicitOrganization,
   onClose,
 }: SettingsPanelInnerProps) {
   const [draft, setDraft] = useState(() => createSettingsDraft(settings, explicitOrganizationEnabled))
-  const { setLocale } = useI18n()
   const panelRef = useRef<HTMLDivElement>(null)
+  const draftLocale = resolveEffectiveLocale(draft.uiLanguage, [systemLocale])
+  const t = createTranslator(draftLocale)
 
   useEffect(() => {
-    const timer = setTimeout(() => {
-      const focusTarget = panelRef.current?.querySelector<HTMLElement>('[data-settings-autofocus="true"]')
-      focusTarget?.focus()
+    setDraft(createSettingsDraft(settings, explicitOrganizationEnabled))
+  }, [explicitOrganizationEnabled, settings])
+
+  useSettingsPanelAutofocus(panelRef)
+  useSettingsPanelFocusTrap(panelRef)
+
+  useEffect(() => {
+    if (!initialSectionId) return
+    const timer = window.setTimeout(() => {
+      document.getElementById(initialSectionId)?.scrollIntoView({ block: 'start' })
     }, 50)
-    return () => clearTimeout(timer)
-  }, [])
+    return () => window.clearTimeout(timer)
+  }, [initialSectionId])
 
   const updateDraft = useCallback(
     <Key extends keyof SettingsDraft>(key: Key, value: SettingsDraft[Key]) => {
@@ -249,20 +374,34 @@ function SettingsPanelInner({
     [],
   )
 
+  const handleGitignoredVisibilityChange = useCallback((value: boolean) => {
+    updateDraft('hideGitignoredFiles', value)
+    onSave({ ...settings, hide_gitignored_files: value })
+  }, [onSave, settings, updateDraft])
+
+  const handleAllNotesFileVisibilityChange = useCallback((value: AllNotesFileVisibility) => {
+    trackAllNotesVisibilityChanged(draft.allNotesFileVisibility, value)
+    updateDraft('allNotesFileVisibility', value)
+    onSave(settingsWithAllNotesFileVisibility(settings, value))
+  }, [draft.allNotesFileVisibility, onSave, settings, updateDraft])
+
+  const handleThemeModeChange = useCallback((value: ThemeMode) => {
+    updateDraft('themeMode', value)
+    applyThemeModeSelection(value)
+    onSave({ ...settings, theme_mode: value })
+  }, [onSave, settings, updateDraft])
+
   const handleSave = useCallback(() => {
     trackTelemetryConsentChange(settings.analytics_enabled === true, draft.analytics)
-    setLocale(draft.language)
+    trackSettingsPreferenceChanges(settings, draft)
     onSave(buildSettingsFromDraft(settings, draft))
     onSaveExplicitOrganization?.(draft.explicitOrganization)
     onClose()
-  }, [draft, onClose, onSave, onSaveExplicitOrganization, setLocale, settings])
+  }, [draft, onClose, onSave, onSaveExplicitOrganization, settings])
 
-  const handleBackdropClick = useCallback(
-    (event: ReactMouseEvent<HTMLDivElement>) => {
-      if (event.target === event.currentTarget) onClose()
-    },
-    [onClose],
-  )
+  const handleBackdropClick = useCallback((event: ReactMouseEvent<HTMLDivElement>) => {
+    if (event.target === event.currentTarget) onClose()
+  }, [onClose])
 
   const handleKeyDown = useCallback(
     (event: ReactKeyboardEvent) => {
@@ -291,47 +430,32 @@ function SettingsPanelInner({
       <div
         ref={panelRef}
         className="rounded-lg border border-border bg-background shadow-[0_18px_55px_var(--shadow-dialog)]"
-        style={{ width: 520, maxHeight: '80vh', display: 'flex', flexDirection: 'column' }}
+        style={{ width: 'min(960px, calc(100vw - 48px))', maxHeight: '86vh', display: 'flex', flexDirection: 'column' }}
       >
-        <SettingsHeader onClose={onClose} />
-        <SettingsBody
-          pullInterval={draft.pullInterval}
-          setPullInterval={(value) => updateDraft('pullInterval', value)}
+        <SettingsHeader onClose={onClose} t={t} />
+        <SettingsBodyFromDraft
+          t={t}
+          draft={draft}
+          locale={draftLocale}
+          systemLocale={systemLocale}
+          updateDraft={updateDraft}
           isGitVault={isGitVault}
-          autoGitEnabled={draft.autoGitEnabled}
-          setAutoGitEnabled={(value) => updateDraft('autoGitEnabled', value)}
-          autoGitIdleThresholdSeconds={draft.autoGitIdleThresholdSeconds}
-          setAutoGitIdleThresholdSeconds={(value) => updateDraft('autoGitIdleThresholdSeconds', value)}
-          autoGitInactiveThresholdSeconds={draft.autoGitInactiveThresholdSeconds}
-          setAutoGitInactiveThresholdSeconds={(value) => updateDraft('autoGitInactiveThresholdSeconds', value)}
-          autoAdvanceInboxAfterOrganize={draft.autoAdvanceInboxAfterOrganize}
-          setAutoAdvanceInboxAfterOrganize={(value) => updateDraft('autoAdvanceInboxAfterOrganize', value)}
           aiAgentsStatus={aiAgentsStatus}
-          defaultAiAgent={draft.defaultAiAgent}
-          setDefaultAiAgent={(value) => updateDraft('defaultAiAgent', value)}
-          releaseChannel={draft.releaseChannel}
-          setReleaseChannel={(value) => updateDraft('releaseChannel', value)}
-          language={draft.language}
-          setLanguage={(value) => updateDraft('language', value)}
-          themeMode={draft.themeMode}
-          setThemeMode={(value) => updateDraft('themeMode', value)}
-          initialH1AutoRename={draft.initialH1AutoRename}
-          setInitialH1AutoRename={(value) => updateDraft('initialH1AutoRename', value)}
-          explicitOrganization={draft.explicitOrganization}
-          setExplicitOrganization={(value) => updateDraft('explicitOrganization', value)}
-          crashReporting={draft.crashReporting}
-          setCrashReporting={(value) => updateDraft('crashReporting', value)}
-          analytics={draft.analytics}
-          setAnalytics={(value) => updateDraft('analytics', value)}
+          onCopyMcpConfig={onCopyMcpConfig}
+          vaults={vaults ?? []}
+          defaultWorkspacePath={defaultWorkspacePath}
+          {...{ onRemoveVault, onReorderVaults, onSetDefaultWorkspace, onUpdateWorkspaceIdentity }}
+          setThemeMode={handleThemeModeChange}
+          setHideGitignoredFiles={handleGitignoredVisibilityChange}
+          setAllNotesFileVisibility={handleAllNotesFileVisibilityChange}
         />
-        <SettingsFooter onClose={onClose} onSave={handleSave} />
+        <SettingsFooter onClose={onClose} onSave={handleSave} t={t} />
       </div>
     </div>
   )
 }
 
-function SettingsHeader({ onClose }: { onClose: () => void }) {
-  const { t } = useI18n()
+function SettingsHeader({ onClose, t }: { onClose: () => void; t: Translate }) {
   return (
     <div
       className="flex items-center justify-between shrink-0"
@@ -351,7 +475,115 @@ function SettingsHeader({ onClose }: { onClose: () => void }) {
   )
 }
 
-function SettingsBody({
+interface SettingsBodyFromDraftProps {
+  t: Translate
+  draft: SettingsDraft
+  locale: AppLocale
+  systemLocale: AppLocale
+  updateDraft: <Key extends keyof SettingsDraft>(key: Key, value: SettingsDraft[Key]) => void
+  isGitVault: boolean
+  aiAgentsStatus: AiAgentsStatus
+  onCopyMcpConfig?: () => void
+  vaults: VaultOption[]
+  defaultWorkspacePath?: string | null
+  onRemoveVault?: (path: string) => void; onReorderVaults?: (orderedPaths: string[]) => void; onSetDefaultWorkspace?: (path: string) => void; onUpdateWorkspaceIdentity?: (path: string, patch: Partial<VaultOption>) => void
+  setThemeMode: (value: ThemeMode) => void
+  setHideGitignoredFiles: (value: boolean) => void
+  setAllNotesFileVisibility: (value: AllNotesFileVisibility) => void
+}
+
+function SettingsBodyFromDraft({
+  t,
+  draft,
+  locale,
+  systemLocale,
+  updateDraft,
+  isGitVault,
+  aiAgentsStatus,
+  onCopyMcpConfig,
+  vaults,
+  defaultWorkspacePath,
+  onRemoveVault, onReorderVaults, onSetDefaultWorkspace, onUpdateWorkspaceIdentity,
+  setThemeMode,
+  setHideGitignoredFiles,
+  setAllNotesFileVisibility,
+}: SettingsBodyFromDraftProps) {
+  return (
+    <SettingsBody
+      t={t}
+      locale={locale}
+      systemLocale={systemLocale}
+      pullInterval={draft.pullInterval}
+      setPullInterval={(value) => updateDraft('pullInterval', value)}
+      isGitVault={isGitVault}
+      autoGitEnabled={draft.autoGitEnabled}
+      setAutoGitEnabled={(value) => updateDraft('autoGitEnabled', value)}
+      autoGitIdleThresholdSeconds={draft.autoGitIdleThresholdSeconds}
+      setAutoGitIdleThresholdSeconds={(value) => updateDraft('autoGitIdleThresholdSeconds', value)}
+      autoGitInactiveThresholdSeconds={draft.autoGitInactiveThresholdSeconds}
+      setAutoGitInactiveThresholdSeconds={(value) => updateDraft('autoGitInactiveThresholdSeconds', value)}
+      autoAdvanceInboxAfterOrganize={draft.autoAdvanceInboxAfterOrganize}
+      setAutoAdvanceInboxAfterOrganize={(value) => updateDraft('autoAdvanceInboxAfterOrganize', value)}
+      aiFeaturesEnabled={draft.aiFeaturesEnabled}
+      setAiFeaturesEnabled={(value) => updateDraft('aiFeaturesEnabled', value)}
+      aiAgentsStatus={aiAgentsStatus}
+      defaultAiAgent={draft.defaultAiAgent}
+      setDefaultAiAgent={(value) => updateDraft('defaultAiAgent', value)}
+      defaultAiTarget={draft.defaultAiTarget}
+      setDefaultAiTarget={(value) => updateDraft('defaultAiTarget', value)}
+      aiModelProviders={draft.aiModelProviders}
+      setAiModelProviders={(value) => updateDraft('aiModelProviders', value)}
+      onCopyMcpConfig={onCopyMcpConfig}
+      releaseChannel={draft.releaseChannel}
+      setReleaseChannel={(value) => updateDraft('releaseChannel', value)}
+      themeMode={draft.themeMode}
+      setThemeMode={setThemeMode}
+      uiLanguage={draft.uiLanguage}
+      setUiLanguage={(value) => updateDraft('uiLanguage', value)}
+      dateDisplayFormat={draft.dateDisplayFormat}
+      setDateDisplayFormat={(value) => updateDraft('dateDisplayFormat', value)}
+      defaultNoteWidth={draft.defaultNoteWidth}
+      setDefaultNoteWidth={(value) => updateDraft('defaultNoteWidth', value)}
+      sidebarTypePluralizationEnabled={draft.sidebarTypePluralizationEnabled}
+      setSidebarTypePluralizationEnabled={(value) => updateDraft('sidebarTypePluralizationEnabled', value)}
+      initialH1AutoRename={draft.initialH1AutoRename}
+      setInitialH1AutoRename={(value) => updateDraft('initialH1AutoRename', value)}
+      hideGitignoredFiles={draft.hideGitignoredFiles}
+      setHideGitignoredFiles={setHideGitignoredFiles}
+      allNotesFileVisibility={draft.allNotesFileVisibility}
+      setAllNotesFileVisibility={setAllNotesFileVisibility}
+      multiWorkspaceEnabled={draft.multiWorkspaceEnabled}
+      setMultiWorkspaceEnabled={(value) => updateDraft('multiWorkspaceEnabled', value)}
+      vaults={vaults}
+      defaultWorkspacePath={defaultWorkspacePath}
+      {...{ onRemoveVault, onReorderVaults, onSetDefaultWorkspace, onUpdateWorkspaceIdentity }}
+      explicitOrganization={draft.explicitOrganization}
+      setExplicitOrganization={(value) => updateDraft('explicitOrganization', value)}
+      crashReporting={draft.crashReporting}
+      setCrashReporting={(value) => updateDraft('crashReporting', value)}
+      analytics={draft.analytics}
+      setAnalytics={(value) => updateDraft('analytics', value)}
+    />
+  )
+}
+
+function SettingsBody(props: SettingsBodyProps) {
+  return (
+    <div className="flex min-h-0 flex-1 overflow-hidden">
+      <SettingsBodyNav t={props.t} />
+      <div className="min-w-0 flex-1 overflow-auto px-6 py-4">
+        <SettingsSyncAndAppearanceSections {...props} />
+        <SettingsContentSections {...props} />
+        <SettingsAgentWorkflowSections {...props} />
+      </div>
+    </div>
+  )
+}
+
+function SettingsSyncAndAppearanceSections({
+  t,
+  locale,
+  systemLocale,
   pullInterval,
   setPullInterval,
   isGitVault,
@@ -361,39 +593,46 @@ function SettingsBody({
   setAutoGitIdleThresholdSeconds,
   autoGitInactiveThresholdSeconds,
   setAutoGitInactiveThresholdSeconds,
-  autoAdvanceInboxAfterOrganize,
-  setAutoAdvanceInboxAfterOrganize,
-  aiAgentsStatus,
-  defaultAiAgent,
-  setDefaultAiAgent,
   releaseChannel,
   setReleaseChannel,
-  language,
-  setLanguage,
+  multiWorkspaceEnabled,
+  setMultiWorkspaceEnabled,
+  vaults,
+  defaultWorkspacePath,
+  onRemoveVault, onReorderVaults, onSetDefaultWorkspace, onUpdateWorkspaceIdentity,
   themeMode,
   setThemeMode,
-  initialH1AutoRename,
-  setInitialH1AutoRename,
-  explicitOrganization,
-  setExplicitOrganization,
-  crashReporting,
-  setCrashReporting,
-  analytics,
-  setAnalytics,
+  uiLanguage,
+  setUiLanguage,
 }: SettingsBodyProps) {
   return (
-    <div style={{ padding: 24, display: 'flex', flexDirection: 'column', gap: 0, overflow: 'auto' }}>
-      <SettingsSection showDivider={false}>
+    <>
+      <SettingsSection id={SETTINGS_SECTION_IDS.sync} showDivider={false}>
         <SyncAndUpdatesSection
+          t={t}
           pullInterval={pullInterval}
           setPullInterval={setPullInterval}
           releaseChannel={releaseChannel}
           setReleaseChannel={setReleaseChannel}
         />
       </SettingsSection>
-
-      <SettingsSection>
+      <SettingsSection id={SETTINGS_SECTION_IDS.workspaces}>
+        <SectionHeading
+          icon={<Cube size={16} aria-hidden="true" />}
+          title={t('settings.workspaces.title')}
+        />
+        <WorkspaceSettingsSection
+          defaultWorkspacePath={defaultWorkspacePath}
+          enabled={multiWorkspaceEnabled}
+          locale={locale}
+          onEnabledChange={setMultiWorkspaceEnabled}
+          {...{ onRemoveVault, onReorderVaults, onSetDefaultWorkspace, onUpdateWorkspaceIdentity }}
+          vaults={vaults}
+        />
+      </SettingsSection>
+      <SettingsSection id={SETTINGS_SECTION_IDS.autogit}>
         <AutoGitSettingsSection
+          t={t}
           isGitVault={isGitVault}
           autoGitEnabled={autoGitEnabled}
           setAutoGitEnabled={setAutoGitEnabled}
@@ -404,32 +643,105 @@ function SettingsBody({
         />
       </SettingsSection>
 
-      <SettingsSection>
-        <AppearanceSettingsSection
-          language={language}
-          setLanguage={setLanguage}
-          themeMode={themeMode}
-          setThemeMode={setThemeMode}
-        />
+      <SettingsSection id={SETTINGS_SECTION_IDS.appearance}>
+        <SectionHeading title={t('settings.appearance.title')} />
+        <SettingsGroup>
+          <AppearanceSettingsSection
+            t={t}
+            themeMode={themeMode}
+            setThemeMode={setThemeMode}
+          />
+          <LanguageSettingsSection
+            t={t}
+            locale={locale}
+            systemLocale={systemLocale}
+            uiLanguage={uiLanguage}
+            setUiLanguage={setUiLanguage}
+          />
+        </SettingsGroup>
       </SettingsSection>
+    </>
+  )
+}
 
-      <SettingsSection>
-        <TitleSettingsSection
-          initialH1AutoRename={initialH1AutoRename}
-          setInitialH1AutoRename={setInitialH1AutoRename}
-        />
-      </SettingsSection>
+function SettingsContentSections({
+  t,
+  dateDisplayFormat,
+  setDateDisplayFormat,
+  defaultNoteWidth,
+  setDefaultNoteWidth,
+  sidebarTypePluralizationEnabled,
+  setSidebarTypePluralizationEnabled,
+  initialH1AutoRename,
+  setInitialH1AutoRename,
+  hideGitignoredFiles,
+  setHideGitignoredFiles,
+  allNotesFileVisibility,
+  setAllNotesFileVisibility,
+}: SettingsBodyProps) {
+  return (
+    <SettingsSection id={SETTINGS_SECTION_IDS.content}>
+      <VaultContentSettingsSection
+        t={t}
+        dateDisplayFormat={dateDisplayFormat}
+        setDateDisplayFormat={setDateDisplayFormat}
+        defaultNoteWidth={defaultNoteWidth}
+        setDefaultNoteWidth={setDefaultNoteWidth}
+        sidebarTypePluralizationEnabled={sidebarTypePluralizationEnabled}
+        setSidebarTypePluralizationEnabled={setSidebarTypePluralizationEnabled}
+        initialH1AutoRename={initialH1AutoRename}
+        setInitialH1AutoRename={setInitialH1AutoRename}
+        hideGitignoredFiles={hideGitignoredFiles}
+        setHideGitignoredFiles={setHideGitignoredFiles}
+        allNotesFileVisibility={allNotesFileVisibility}
+        setAllNotesFileVisibility={setAllNotesFileVisibility}
+      />
+    </SettingsSection>
+  )
+}
 
-      <SettingsSection>
+function SettingsAgentWorkflowSections({
+  t,
+  autoAdvanceInboxAfterOrganize,
+  setAutoAdvanceInboxAfterOrganize,
+  aiFeaturesEnabled,
+  setAiFeaturesEnabled,
+  aiAgentsStatus,
+  defaultAiAgent,
+  setDefaultAiAgent,
+  defaultAiTarget,
+  setDefaultAiTarget,
+  aiModelProviders,
+  setAiModelProviders,
+  onCopyMcpConfig,
+  explicitOrganization,
+  setExplicitOrganization,
+  crashReporting,
+  setCrashReporting,
+  analytics,
+  setAnalytics,
+}: SettingsBodyProps) {
+  return (
+    <>
+      <SettingsSection id={SETTINGS_SECTION_IDS.ai}>
         <AiAgentSettingsSection
+          t={t}
+          aiFeaturesEnabled={aiFeaturesEnabled}
+          setAiFeaturesEnabled={setAiFeaturesEnabled}
           aiAgentsStatus={aiAgentsStatus}
           defaultAiAgent={defaultAiAgent}
           setDefaultAiAgent={setDefaultAiAgent}
+          defaultAiTarget={defaultAiTarget}
+          setDefaultAiTarget={setDefaultAiTarget}
+          aiModelProviders={aiModelProviders}
+          setAiModelProviders={setAiModelProviders}
+          onCopyMcpConfig={onCopyMcpConfig}
         />
       </SettingsSection>
 
-      <SettingsSection>
+      <SettingsSection id={SETTINGS_SECTION_IDS.workflow}>
         <OrganizationWorkflowSection
+          t={t}
           checked={explicitOrganization}
           onChange={setExplicitOrganization}
           autoAdvanceInboxAfterOrganize={autoAdvanceInboxAfterOrganize}
@@ -437,101 +749,90 @@ function SettingsBody({
         />
       </SettingsSection>
 
-      <SettingsSection>
+      <SettingsSection id={SETTINGS_SECTION_IDS.privacy}>
         <PrivacySettingsSection
+          t={t}
           crashReporting={crashReporting}
           setCrashReporting={setCrashReporting}
           analytics={analytics}
           setAnalytics={setAnalytics}
         />
       </SettingsSection>
-    </div>
+    </>
   )
 }
 
 function SyncAndUpdatesSection({
+  t,
   pullInterval,
   setPullInterval,
   releaseChannel,
   setReleaseChannel,
-}: Pick<SettingsBodyProps, 'pullInterval' | 'setPullInterval' | 'releaseChannel' | 'setReleaseChannel'>) {
-  const { t } = useI18n()
+}: Pick<SettingsBodyProps, 't' | 'pullInterval' | 'setPullInterval' | 'releaseChannel' | 'setReleaseChannel'>) {
   return (
     <>
       <SectionHeading
-        title={t('settings.syncUpdates.title')}
-        description={t('settings.syncUpdates.description')}
+        title={t('settings.sync.title')}
       />
 
-      <LabeledSelect
-        label={t('settings.pullInterval')}
-        value={`${pullInterval}`}
-        onValueChange={(value) => setPullInterval(Number(value))}
-        options={PULL_INTERVAL_OPTIONS.map((value) => ({
-          value: `${value}`,
-          label: `${value}`,
-        }))}
-        testId="settings-pull-interval"
-        autoFocus={true}
-      />
+      <SettingsGroup>
+        <SettingsRow label={t('settings.pullInterval')} description={t('settings.pullIntervalDescription')}>
+          <SelectControl
+            ariaLabel={t('settings.pullInterval')}
+            value={`${pullInterval}`}
+            onValueChange={(value) => setPullInterval(Number(value))}
+            options={PULL_INTERVAL_OPTIONS.map((value) => ({
+              value: `${value}`,
+              label: `${value}`,
+            }))}
+            testId="settings-pull-interval"
+            autoFocus={true}
+          />
+        </SettingsRow>
 
-      <LabeledSelect
-        label={t('settings.releaseChannel')}
-        value={releaseChannel}
-        onValueChange={(value) => setReleaseChannel(value as ReleaseChannel)}
-        options={[
-          { value: 'stable', label: t('settings.releaseChannel.stable') },
-          { value: 'alpha', label: t('settings.releaseChannel.alpha') },
-        ]}
-        testId="settings-release-channel"
-      />
+        <SettingsRow label={t('settings.releaseChannel')} description={t('settings.releaseChannelDescription')}>
+          <SelectControl
+            ariaLabel={t('settings.releaseChannel')}
+            value={releaseChannel}
+            onValueChange={(value) => setReleaseChannel(value as ReleaseChannel)}
+            options={[
+              { value: 'stable', label: t('settings.releaseStable') },
+              { value: 'alpha', label: t('settings.releaseAlpha') },
+            ]}
+            testId="settings-release-channel"
+          />
+        </SettingsRow>
+      </SettingsGroup>
     </>
   )
 }
 
 function AppearanceSettingsSection({
-  language,
-  setLanguage,
+  t,
   themeMode,
   setThemeMode,
-}: Pick<SettingsBodyProps, 'language' | 'setLanguage' | 'themeMode' | 'setThemeMode'>) {
-  const { t } = useI18n()
+}: Pick<SettingsBodyProps, 't' | 'themeMode' | 'setThemeMode'>) {
   return (
-    <>
-      <SectionHeading
-        title={t('settings.appearance.title')}
-        description={t('settings.appearance.description')}
-      />
-
-      <LabeledSelect
-        label={t('settings.language')}
-        value={language}
-        onValueChange={(value) => setLanguage(value as AppLocale)}
-        options={[
-          { value: 'en', label: t('common.english') },
-          { value: 'zh-Hans', label: t('common.chinese') },
-        ]}
-        testId="settings-language"
-      />
-
-      <ThemeModeControl value={themeMode} onChange={setThemeMode} />
-    </>
+    <SettingsRow label={t('settings.theme.label')} description={t('settings.appearance.description')}>
+      <ThemeModeControl value={themeMode} onChange={setThemeMode} t={t} />
+    </SettingsRow>
   )
 }
 
 function ThemeModeControl({
   value,
   onChange,
+  t,
 }: {
   value: ThemeMode
   onChange: (value: ThemeMode) => void
+  t: Translate
 }) {
-  const { t } = useI18n()
   return (
     <div
       className="inline-flex w-full rounded-md border border-border bg-muted p-1"
       role="radiogroup"
-      aria-label={t('settings.theme')}
+      aria-label={t('settings.theme.label')}
       data-testid="settings-theme-mode"
     >
       <ThemeModeButton label={t('settings.theme.light')} selected={value === 'light'} value="light" onSelect={onChange}>
@@ -539,6 +840,9 @@ function ThemeModeControl({
       </ThemeModeButton>
       <ThemeModeButton label={t('settings.theme.dark')} selected={value === 'dark'} value="dark" onSelect={onChange}>
         <Moon size={14} />
+      </ThemeModeButton>
+      <ThemeModeButton label={t('settings.theme.system')} selected={value === 'system'} value="system" onSelect={onChange}>
+        <Monitor size={14} />
       </ThemeModeButton>
     </div>
   )
@@ -579,7 +883,14 @@ function ThemeModeButton({
   )
 }
 
+function autoGitSectionDescription(isGitVault: boolean, t: Translate): string {
+  return isGitVault
+    ? t('settings.autogit.description.enabled')
+    : t('settings.autogit.description.disabled')
+}
+
 function AutoGitSettingsSection({
+  t,
   isGitVault,
   autoGitEnabled,
   setAutoGitEnabled,
@@ -589,6 +900,7 @@ function AutoGitSettingsSection({
   setAutoGitInactiveThresholdSeconds,
 }: Pick<
   SettingsBodyProps,
+  | 't'
   | 'isGitVault'
   | 'autoGitEnabled'
   | 'setAutoGitEnabled'
@@ -597,383 +909,350 @@ function AutoGitSettingsSection({
   | 'autoGitInactiveThresholdSeconds'
   | 'setAutoGitInactiveThresholdSeconds'
 >) {
-  const { t } = useI18n()
   return (
     <>
       <SectionHeading
-        title="AutoGit"
-        description={isGitVault
-          ? t('settings.autogit.descriptionEnabled')
-          : t('settings.autogit.descriptionDisabled')}
+        title={t('settings.autogit.title')}
       />
 
-      <SettingsSwitchRow
-        label={t('settings.autogit.enable')}
-        description={t('settings.autogit.enableDescription')}
-        checked={autoGitEnabled}
-        onChange={setAutoGitEnabled}
-        disabled={!isGitVault}
-        testId="settings-autogit-enabled"
-      />
+      <SettingsGroup>
+        <SettingsSwitchRow
+          label={t('settings.autogit.enable')}
+          description={isGitVault ? t('settings.autogit.enableDescription') : autoGitSectionDescription(isGitVault, t)}
+          checked={autoGitEnabled}
+          onChange={setAutoGitEnabled}
+          disabled={!isGitVault}
+          testId="settings-autogit-enabled"
+        />
 
-      <LabeledNumberInput
-        label={t('settings.autogit.idleThreshold')}
-        value={autoGitIdleThresholdSeconds}
-        onValueChange={setAutoGitIdleThresholdSeconds}
-        testId="settings-autogit-idle-threshold"
-        disabled={!isGitVault}
-      />
+        <SettingsRow
+          label={t('settings.autogit.idleThreshold')}
+          description={t('settings.autogit.idleThresholdDescription')}
+          controlWidth="compact"
+        >
+          <NumberInputControl
+            ariaLabel={t('settings.autogit.idleThreshold')}
+            value={autoGitIdleThresholdSeconds}
+            onValueChange={setAutoGitIdleThresholdSeconds}
+            testId="settings-autogit-idle-threshold"
+            disabled={!isGitVault}
+          />
+        </SettingsRow>
 
-      <LabeledNumberInput
-        label={t('settings.autogit.inactiveThreshold')}
-        value={autoGitInactiveThresholdSeconds}
-        onValueChange={setAutoGitInactiveThresholdSeconds}
-        testId="settings-autogit-inactive-threshold"
-        disabled={!isGitVault}
-      />
+        <SettingsRow
+          label={t('settings.autogit.inactiveThreshold')}
+          description={t('settings.autogit.inactiveThresholdDescription')}
+          controlWidth="compact"
+        >
+          <NumberInputControl
+            ariaLabel={t('settings.autogit.inactiveThreshold')}
+            value={autoGitInactiveThresholdSeconds}
+            onValueChange={setAutoGitInactiveThresholdSeconds}
+            testId="settings-autogit-inactive-threshold"
+            disabled={!isGitVault}
+          />
+        </SettingsRow>
+      </SettingsGroup>
     </>
   )
 }
 
-function TitleSettingsSection({
-  initialH1AutoRename,
-  setInitialH1AutoRename,
-}: Pick<SettingsBodyProps, 'initialH1AutoRename' | 'setInitialH1AutoRename'>) {
-  const { t } = useI18n()
-  return (
-    <>
-      <SectionHeading
-        title={t('settings.titleFiles.title')}
-        description={t('settings.titleFiles.description')}
-      />
+function buildLanguageOptions(t: Translate, locale: AppLocale, systemLocale: AppLocale) {
+  return [
+    {
+      value: SYSTEM_UI_LANGUAGE,
+      label: t('settings.language.system', {
+        language: localeDisplayName(systemLocale, locale),
+      }),
+    },
+    ...APP_LOCALES.map((appLocale) => ({
+      value: appLocale,
+      label: localeDisplayName(appLocale, locale),
+    })),
+  ]
+}
 
-      <SettingsSwitchRow
-        label={t('settings.titleFiles.autoRename')}
-        description={t('settings.titleFiles.autoRenameDescription')}
-        checked={initialH1AutoRename}
-        onChange={setInitialH1AutoRename}
-        testId="settings-initial-h1-auto-rename"
+function LanguageSettingsSection({
+  t,
+  locale,
+  systemLocale,
+  uiLanguage,
+  setUiLanguage,
+}: Pick<SettingsBodyProps, 't' | 'locale' | 'systemLocale' | 'uiLanguage' | 'setUiLanguage'>) {
+  return (
+    <SettingsRow
+      label={t('settings.language.title')}
+      description={`${t('settings.language.description')} ${t('settings.language.summary')}`}
+    >
+      <SelectControl
+        ariaLabel={t('settings.language.label')}
+        value={uiLanguage}
+        onValueChange={(value) => setUiLanguage(value as UiLanguagePreference)}
+        options={buildLanguageOptions(t, locale, systemLocale)}
+        testId="settings-ui-language"
       />
-    </>
+    </SettingsRow>
   )
 }
 
-function buildDefaultAiAgentOptions(
+function buildDefaultAiTargetOptions(
   aiAgentsStatus: AiAgentsStatus,
-  t: ReturnType<typeof useI18n>['t'],
+  providers: AiModelProvider[],
+  t: Translate,
 ): Array<{ value: string; label: string }> {
-  return AI_AGENT_DEFINITIONS.map((definition) => {
+  const agentOptions = AI_AGENT_DEFINITIONS.map((definition) => {
     const status = aiAgentsStatus[definition.id]
     const suffix = status.status === 'installed'
-      ? t('settings.ai.installedSuffix', { version: status.version ? ` ${status.version}` : '' })
-      : t('settings.ai.missingSuffix')
+      ? ` (${t('settings.aiAgents.installed')}${status.version ? ` ${status.version}` : ''})`
+      : ` (${t('settings.aiAgents.missing')})`
     return {
-      value: definition.id,
-      label: `${definition.label}${suffix}`,
+      value: agentTargetId(definition.id),
+      label: `${t('settings.aiAgents.agentGroup')}: ${definition.label}${suffix}`,
     }
   })
+  const modelOptions = configuredModelTargets(providers).map((target) => ({
+    value: target.id,
+    label: `${target.provider.kind === 'ollama' || target.provider.kind === 'lm_studio' ? t('settings.aiAgents.localGroup') : t('settings.aiAgents.apiGroup')}: ${target.label}`,
+  }))
+  return [...agentOptions, ...modelOptions]
 }
 
 function AiAgentSettingsSection({
+  t,
+  aiFeaturesEnabled,
+  setAiFeaturesEnabled,
   aiAgentsStatus,
   defaultAiAgent,
   setDefaultAiAgent,
-}: Pick<SettingsBodyProps, 'aiAgentsStatus' | 'defaultAiAgent' | 'setDefaultAiAgent'>) {
-  const { t } = useI18n()
+  defaultAiTarget,
+  setDefaultAiTarget,
+  aiModelProviders,
+  setAiModelProviders,
+  onCopyMcpConfig,
+}: Pick<
+  SettingsBodyProps,
+  | 't'
+  | 'aiFeaturesEnabled'
+  | 'setAiFeaturesEnabled'
+  | 'aiAgentsStatus'
+  | 'defaultAiAgent'
+  | 'setDefaultAiAgent'
+  | 'defaultAiTarget'
+  | 'setDefaultAiTarget'
+  | 'aiModelProviders'
+  | 'setAiModelProviders'
+  | 'onCopyMcpConfig'
+>) {
+  const selectedTarget = resolveAiTarget({
+    default_ai_agent: defaultAiAgent,
+    default_ai_target: defaultAiTarget,
+    ai_model_providers: aiModelProviders,
+  } as Settings)
+
   return (
     <>
       <SectionHeading
-        title={t('settings.ai.title')}
-        description={t('settings.ai.description')}
+        title={t('settings.aiAgents.title')}
       />
 
-      <LabeledSelect
-        label={t('settings.ai.default')}
-        value={defaultAiAgent}
-        onValueChange={(value) => setDefaultAiAgent(value as AiAgentId)}
-        options={buildDefaultAiAgentOptions(aiAgentsStatus, t)}
-        testId="settings-default-ai-agent"
-      />
+      <SettingsGroup>
+        <SettingsSwitchRow
+          label={t('settings.aiFeatures.enable')}
+          description={t('settings.aiFeatures.enableDescription')}
+          checked={aiFeaturesEnabled}
+          onChange={setAiFeaturesEnabled}
+          testId="settings-ai-features-enabled"
+        />
+      </SettingsGroup>
 
-      <div style={{ fontSize: 11, color: 'var(--muted-foreground)', lineHeight: 1.5 }}>
-        {renderDefaultAiAgentSummary(defaultAiAgent, aiAgentsStatus, t)}
-      </div>
+      {aiFeaturesEnabled ? (
+        <>
+          <SettingsGroup>
+            <SettingsRow
+              label={t('settings.aiAgents.defaultTarget')}
+              description={renderDefaultAiTargetSummary(selectedTarget, aiAgentsStatus, t)}
+              controlWidth="wide"
+            >
+              <SelectControl
+                ariaLabel={t('settings.aiAgents.defaultTarget')}
+                value={defaultAiTarget}
+                onValueChange={(value) => {
+                  setDefaultAiTarget(value)
+                  if (value.startsWith('agent:')) {
+                    const agent = value.replace('agent:', '') as AiAgentId
+                    setDefaultAiAgent(agent)
+                  }
+                }}
+                options={buildDefaultAiTargetOptions(aiAgentsStatus, aiModelProviders, t)}
+                testId="settings-default-ai-agent"
+              />
+            </SettingsRow>
+          </SettingsGroup>
+
+          <AiTargetManagementTabs
+            t={t}
+            aiAgentsStatus={aiAgentsStatus}
+            aiModelProviders={aiModelProviders}
+            setAiModelProviders={setAiModelProviders}
+            onCopyMcpConfig={onCopyMcpConfig}
+          />
+        </>
+      ) : null}
     </>
   )
 }
 
-function PrivacySettingsSection({
-  crashReporting,
-  setCrashReporting,
-  analytics,
-  setAnalytics,
-}: Pick<SettingsBodyProps, 'crashReporting' | 'setCrashReporting' | 'analytics' | 'setAnalytics'>) {
-  const { t } = useI18n()
+function AiTargetManagementTabs({
+  t,
+  aiAgentsStatus,
+  aiModelProviders,
+  setAiModelProviders,
+  onCopyMcpConfig,
+}: {
+  t: Translate
+  aiAgentsStatus: AiAgentsStatus
+  aiModelProviders: AiModelProvider[]
+  setAiModelProviders: (value: AiModelProvider[]) => void
+  onCopyMcpConfig?: () => void
+}) {
   return (
-    <>
-      <SectionHeading
-        title={t('settings.privacy.title')}
-        description={t('settings.privacy.description')}
-      />
-
-      <TelemetryToggle
-        label={t('settings.privacy.crashReporting')}
-        description={t('settings.privacy.crashReportingDescription')}
-        checked={crashReporting}
-        onChange={setCrashReporting}
-        testId="settings-crash-reporting"
-      />
-      <TelemetryToggle
-        label={t('settings.privacy.analytics')}
-        description={t('settings.privacy.analyticsDescription')}
-        checked={analytics}
-        onChange={setAnalytics}
-        testId="settings-analytics"
-      />
-    </>
+    <Tabs defaultValue="agents" className="gap-3">
+      <TabsList className="grid h-9 w-full grid-cols-3">
+        <TabsTrigger value="agents">{t('settings.aiAgents.agentGroup')}</TabsTrigger>
+        <TabsTrigger value="local">{t('settings.aiAgents.localGroup')}</TabsTrigger>
+        <TabsTrigger value="api">{t('settings.aiAgents.apiGroup')}</TabsTrigger>
+      </TabsList>
+      <TabsContent value="agents" className="space-y-3">
+        <AiAgentsInstalledSection t={t} aiAgentsStatus={aiAgentsStatus} />
+        {onCopyMcpConfig ? <CopyMcpConfigButton t={t} onCopyMcpConfig={onCopyMcpConfig} /> : null}
+      </TabsContent>
+      <TabsContent value="local">
+        <AiProviderSettings t={t} mode="local" providers={aiModelProviders} onChange={setAiModelProviders} />
+      </TabsContent>
+      <TabsContent value="api">
+        <AiProviderSettings t={t} mode="api" providers={aiModelProviders} onChange={setAiModelProviders} />
+      </TabsContent>
+    </Tabs>
   )
 }
 
-function SettingsSection({
-  children,
-  showDivider = true,
+function CopyMcpConfigButton({
+  t,
+  onCopyMcpConfig,
 }: {
-  children: ReactNode
-  showDivider?: boolean
+  t: Translate
+  onCopyMcpConfig: () => void
 }) {
   return (
-    <div style={{ display: 'flex', flexDirection: 'column', gap: 14, padding: '18px 0' }}>
-      {showDivider ? <Divider /> : null}
-      {children}
+    <Button
+      type="button"
+      variant="outline"
+      size="sm"
+      onClick={onCopyMcpConfig}
+      className="w-fit gap-2"
+      aria-label={t('ai.panel.copyMcpConfig')}
+      data-testid="settings-copy-mcp-config"
+    >
+      <Copy size={15} />
+      {t('ai.panel.copyMcpConfig')}
+    </Button>
+  )
+}
+
+function AiAgentsInstalledSection({
+  t,
+  aiAgentsStatus,
+}: {
+  t: Translate
+  aiAgentsStatus: AiAgentsStatus
+}) {
+  return (
+    <div className="rounded-md border border-border bg-card p-3">
+      <div className="text-sm font-medium text-foreground">{t('settings.aiAgents.installedTitle')}</div>
+      <div className="mt-1 text-xs leading-5 text-muted-foreground">{t('settings.aiAgents.installedDescription')}</div>
+      <div className="mt-3 grid grid-cols-2 gap-2">
+        {AI_AGENT_DEFINITIONS.map((definition) => {
+          const status = aiAgentsStatus[definition.id]
+          const installed = status.status === 'installed'
+          return (
+            <div key={definition.id} className="rounded-md border border-border bg-background px-3 py-2">
+              <div className="flex items-center justify-between gap-2">
+                <div className="truncate text-sm font-medium text-foreground">{definition.label}</div>
+                <div className={installed ? 'text-xs text-emerald-700' : 'text-xs text-muted-foreground'}>
+                  {installed ? t('settings.aiAgents.installed') : t('settings.aiAgents.missing')}
+                </div>
+              </div>
+              <div className="mt-1 truncate text-xs text-muted-foreground">
+                {status.version || t('settings.aiAgents.noVersion')}
+              </div>
+            </div>
+          )
+        })}
+      </div>
     </div>
   )
 }
 
-function SectionHeading({
-  title,
-  description,
-}: {
-  title: string
-  description: string
-}) {
-  return (
-    <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
-      <div
-        style={{
-          fontSize: 11,
-          fontWeight: 700,
-          letterSpacing: '0.08em',
-          textTransform: 'uppercase',
-          color: 'var(--muted-foreground)',
-        }}
-      >
-        {title}
-      </div>
-      <div style={{ fontSize: 12, color: 'var(--muted-foreground)', lineHeight: 1.55, maxWidth: 420 }}>
-        {description}
-      </div>
-    </div>
-  )
-}
-
-function Divider() {
-  return <div style={{ height: 1, background: 'color-mix(in srgb, var(--border) 82%, transparent)' }} />
-}
-
-function renderDefaultAiAgentSummary(
-  defaultAiAgent: AiAgentId,
-  aiAgentsStatus: AiAgentsStatus,
-  t: ReturnType<typeof useI18n>['t'],
-): string {
+function renderDefaultAiAgentSummary(defaultAiAgent: AiAgentId, aiAgentsStatus: AiAgentsStatus, t: Translate): string {
   const definition = getAiAgentDefinition(defaultAiAgent)
-  const status = aiAgentsStatus[defaultAiAgent]
+  const status = Reflect.get(aiAgentsStatus, defaultAiAgent) as AiAgentsStatus[AiAgentId]
   if (status.status === 'installed') {
-    return t('settings.ai.readySummary', {
-      label: definition.label,
+    return t('settings.aiAgents.ready', {
+      agent: definition.label,
       version: status.version ? ` ${status.version}` : '',
     })
   }
-  return t('settings.ai.missingSummary', { label: definition.label })
+  return t('settings.aiAgents.notInstalled', { agent: definition.label })
 }
 
-function LabeledSelect({
-  label,
-  value,
-  onValueChange,
-  options,
-  testId,
-  autoFocus = false,
-}: {
-  label: string
-  value: string
-  onValueChange: (value: string) => void
-  options: Array<{ value: string; label: string }>
-  testId: string
-  autoFocus?: boolean
-}) {
-  return (
-    <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
-      <label style={{ fontSize: 12, fontWeight: 500, color: 'var(--foreground)' }}>{label}</label>
-      <Select value={value} onValueChange={onValueChange}>
-        <SelectTrigger
-          className="w-full bg-transparent"
-          data-testid={testId}
-          data-value={value}
-          data-settings-autofocus={autoFocus ? 'true' : undefined}
-        >
-          <SelectValue />
-        </SelectTrigger>
-        <SelectContent position="popper" data-anchor-strategy="popper">
-          {options.map((option) => (
-            <SelectItem key={option.value} value={option.value}>
-              {option.label}
-            </SelectItem>
-          ))}
-        </SelectContent>
-      </Select>
-    </div>
-  )
-}
-
-function LabeledNumberInput({
-  label,
-  value,
-  onValueChange,
-  testId,
-  disabled = false,
-}: {
-  label: string
-  value: number
-  onValueChange: (value: number) => void
-  testId: string
-  disabled?: boolean
-}) {
-  return (
-    <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
-      <label style={{ fontSize: 12, fontWeight: 500, color: 'var(--foreground)' }} htmlFor={testId}>{label}</label>
-      <Input
-        id={testId}
-        type="number"
-        min={1}
-        step={1}
-        value={value}
-        disabled={disabled}
-        onChange={(event) => onValueChange(sanitizePositiveInteger(Number(event.target.value), value))}
-        data-testid={testId}
-        className="w-full bg-transparent"
-      />
-    </div>
-  )
+function renderDefaultAiTargetSummary(target: ReturnType<typeof resolveAiTarget>, aiAgentsStatus: AiAgentsStatus, t: Translate): string {
+  if (target.kind === 'api_model') {
+    const storage = target.provider.api_key_storage === 'local_file'
+      ? t('settings.aiAgents.apiLocalKey')
+      : target.provider.api_key_env_var
+      ? t('settings.aiAgents.apiEnv', { env: target.provider.api_key_env_var })
+      : t('settings.aiAgents.apiNoKey')
+    return t('settings.aiAgents.apiReady', { target: target.label, storage })
+  }
+  return renderDefaultAiAgentSummary(target.agent, aiAgentsStatus, t)
 }
 
 function OrganizationWorkflowSection({
+  t,
   checked,
   onChange,
   autoAdvanceInboxAfterOrganize,
   onChangeAutoAdvanceInboxAfterOrganize,
 }: {
+  t: Translate
   checked: boolean
   onChange: (value: boolean) => void
   autoAdvanceInboxAfterOrganize: boolean
   onChangeAutoAdvanceInboxAfterOrganize: (value: boolean) => void
 }) {
-  const { t } = useI18n()
   return (
     <>
       <SectionHeading
         title={t('settings.workflow.title')}
-        description={t('settings.workflow.descriptionUpdated')}
       />
 
-      <SettingsSwitchRow
-        label={t('settings.workflow.explicit')}
-        description={t('settings.workflow.explicitDescription')}
-        checked={checked}
-        onChange={onChange}
-        testId="settings-explicit-organization"
-      />
+      <SettingsGroup>
+        <SettingsSwitchRow
+          label={t('settings.workflow.explicit')}
+          description={t('settings.workflow.explicitDescription')}
+          checked={checked}
+          onChange={onChange}
+          testId="settings-explicit-organization"
+        />
 
-      <SettingsSwitchRow
-        label={t('settings.workflow.autoAdvance')}
-        description={t('settings.workflow.autoAdvanceDescription')}
-        checked={autoAdvanceInboxAfterOrganize}
-        onChange={onChangeAutoAdvanceInboxAfterOrganize}
-        testId="settings-auto-advance-inbox-after-organize"
-      />
+        <SettingsSwitchRow
+          label={t('settings.workflow.autoAdvance')}
+          description={t('settings.workflow.autoAdvanceDescription')}
+          checked={autoAdvanceInboxAfterOrganize}
+          onChange={onChangeAutoAdvanceInboxAfterOrganize}
+          testId="settings-auto-advance-inbox-after-organize"
+        />
+      </SettingsGroup>
     </>
-  )
-}
-
-function SettingsSwitchRow({
-  label,
-  description,
-  checked,
-  onChange,
-  disabled = false,
-  testId,
-}: {
-  label: string
-  description: string
-  checked: boolean
-  onChange: (value: boolean) => void
-  disabled?: boolean
-  testId?: string
-}) {
-  return (
-    <label
-      className="flex items-start justify-between gap-3"
-      style={{ cursor: disabled ? 'not-allowed' : 'pointer', opacity: disabled ? 0.6 : 1 }}
-      data-testid={testId}
-    >
-      <div className="space-y-1">
-        <div style={{ fontSize: 13, fontWeight: 500, color: 'var(--foreground)' }}>{label}</div>
-        <div style={{ fontSize: 11, color: 'var(--muted-foreground)' }}>{description}</div>
-      </div>
-      <Switch checked={checked} onCheckedChange={onChange} aria-label={label} disabled={disabled} />
-    </label>
-  )
-}
-
-function TelemetryToggle({
-  label,
-  description,
-  checked,
-  onChange,
-  testId,
-}: {
-  label: string
-  description: string
-  checked: boolean
-  onChange: (value: boolean) => void
-  testId: string
-}) {
-  return (
-    <label className="flex items-center gap-3" style={{ cursor: 'pointer' }} data-testid={testId}>
-      <Checkbox checked={checked} onCheckedChange={(value) => onChange(isChecked(value))} />
-      <div>
-        <div style={{ fontSize: 13, fontWeight: 500, color: 'var(--foreground)' }}>{label}</div>
-        <div style={{ fontSize: 11, color: 'var(--muted-foreground)' }}>{description}</div>
-      </div>
-    </label>
-  )
-}
-
-function SettingsFooter({ onClose, onSave }: { onClose: () => void; onSave: () => void }) {
-  const { t } = useI18n()
-  return (
-    <div
-      className="flex items-center justify-between shrink-0"
-      style={{ height: 56, padding: '0 24px', borderTop: '1px solid var(--border)' }}
-    >
-      <span style={{ fontSize: 11, color: 'var(--muted-foreground)' }}>{t('settings.openShortcutHint')}</span>
-      <div className="flex gap-2">
-        <Button variant="outline" onClick={onClose}>
-          {t('common.cancel')}
-        </Button>
-        <Button onClick={onSave} data-testid="settings-save">
-          {t('common.save')}
-        </Button>
-      </div>
-    </div>
   )
 }

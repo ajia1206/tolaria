@@ -78,16 +78,10 @@ fn assert_alias_parser_recovers(case: AliasRecoveryCase<'_>) {
 
 #[test]
 fn test_filtered_properties_stay_hidden() {
-    let cases = [
-        HiddenPropertyCase {
-            content: "---\nMentor: \"[[person/alice]]\"\nCompany: Acme Corp\n---\n# Test\n",
-            hidden_key: "Mentor",
-        },
-        HiddenPropertyCase {
-            content: "---\nTags:\n  - productivity\n  - writing\nCompany: Acme Corp\n---\n# Test\n",
-            hidden_key: "Tags",
-        },
-    ];
+    let cases = [HiddenPropertyCase {
+        content: "---\nMentor: \"[[person/alice]]\"\nCompany: Acme Corp\n---\n# Test\n",
+        hidden_key: "Mentor",
+    }];
 
     for case in cases {
         assert_filtered_property_stays_hidden(case);
@@ -115,6 +109,55 @@ fn test_single_element_array_properties_unwrap_to_scalars() {
 }
 
 #[test]
+fn test_multi_element_array_properties_are_preserved() {
+    let dir = TempDir::new().unwrap();
+    let entry = parse_test_entry(
+        &dir,
+        "playlist.md",
+        "---\ntags:\n  - blues\n  - chicago\n---\n# Playlist\n",
+    );
+
+    assert_eq!(
+        entry.properties.get("tags"),
+        Some(&serde_json::json!(["blues", "chicago"]))
+    );
+}
+
+#[test]
+fn test_blank_scalar_properties_are_preserved() {
+    let dir = TempDir::new().unwrap();
+    let entry = parse_test_entry(
+        &dir,
+        "book.md",
+        "---\ntype: Book\nstart date:\nrating: \n---\n# Book\n",
+    );
+
+    assert!(entry
+        .properties
+        .get("start date")
+        .is_some_and(|value| value.is_null()));
+    assert!(entry
+        .properties
+        .get("rating")
+        .is_some_and(|value| value.is_null()));
+}
+
+#[test]
+fn test_unquoted_wikilink_relationships_are_preserved() {
+    let dir = TempDir::new().unwrap();
+    let entry = parse_test_entry(
+        &dir,
+        "book.md",
+        "---\ntype: Type\nMentor: [[person/alice]]\n---\n# Book\n",
+    );
+
+    assert_eq!(
+        entry.relationships.get("Mentor"),
+        Some(&vec!["[[person/alice]]".to_string()])
+    );
+}
+
+#[test]
 fn test_alias_parser_recovers_special_alias_items() {
     let cases = [
         AliasRecoveryCase {
@@ -132,4 +175,14 @@ fn test_alias_parser_recovers_special_alias_items() {
     for case in cases {
         assert_alias_parser_recovers(case);
     }
+}
+
+#[test]
+fn test_alias_collisions_keep_frontmatter_with_last_value_winning() {
+    let dir = TempDir::new().unwrap();
+    let content = "---\ntype: Note\nstatus: Active\nStatus: Evergreened\n---\n# Test\n";
+    let entry = parse_test_entry(&dir, "test.md", content);
+
+    assert_eq!(entry.is_a, Some("Note".to_string()));
+    assert_eq!(entry.status, Some("Evergreened".to_string()));
 }

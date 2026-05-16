@@ -77,9 +77,8 @@ function isEditableElement(element: Element | null): boolean {
 function isInteractiveElement(element: Element | null): boolean {
   if (!element) return false
   if (isEditableElement(element)) return true
-  if (!(element instanceof HTMLElement)) return false
-  return element instanceof HTMLButtonElement
-    || element instanceof HTMLAnchorElement
+  return element.tagName === 'BUTTON'
+    || element.tagName === 'A'
     || element.getAttribute('role') === 'button'
 }
 
@@ -259,7 +258,7 @@ function useMoveHighlight({
     const currentIndex = resolveCurrentIndex(items, highlightedPathRef.current, selectedNotePath)
     const nextIndex = moveHighlightIndex(currentIndex, direction, items.length)
     const currentPath = highlightedPathRef.current ?? selectedNotePath
-    const nextItem = items[nextIndex]
+    const nextItem = items.at(nextIndex)
     if (!nextItem || nextItem.path === currentPath) return
 
     syncHighlightedPath(nextItem.path)

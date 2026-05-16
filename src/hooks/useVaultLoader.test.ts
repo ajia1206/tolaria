@@ -1,7 +1,8 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest'
 import { renderHook, act, waitFor } from '@testing-library/react'
-import type { VaultEntry, ModifiedFile, GitCommit } from '../types'
+import type { VaultEntry, ModifiedFile, GitCommit, FolderNode } from '../types'
 import { useVaultLoader, resolveNoteStatus } from './useVaultLoader'
+import { workspaceIdentityFromVault } from '../utils/workspaces'
 
 const mockEntries: VaultEntry[] = [
   {
@@ -11,6 +12,8 @@ const mockEntries: VaultEntry[] = [
     archived: false,
     modifiedAt: 1700000000, createdAt: 1700000000, fileSize: 100,
     snippet: '', wordCount: 0, relationships: {}, icon: null, color: null, order: null, template: null, sort: null, outgoingLinks: [],
+    sidebarLabel: null, view: null, visible: null, organized: false, favorite: false, favoriteIndex: null,
+    listPropertiesDisplay: [], properties: {}, hasH1: false,
   },
 ]
 
@@ -41,12 +44,13 @@ const defaultMockHandlers: Record<string, MockCommandHandler> = {
 }
 
 function defaultMockInvoke(cmd: string, args?: Record<string, unknown>) {
-  const handler = defaultMockHandlers[cmd]
+  const handler = Reflect.get(defaultMockHandlers, cmd) as ((args?: Record<string, unknown>) => unknown) | undefined
   return Promise.resolve(handler ? handler(args) : null)
 }
 
 let mockIsTauri = false
 const backendInvokeFn = vi.fn(defaultMockInvoke)
+const EMPTY_ARRAY_COMMANDS = new Set(['get_modified_files', 'list_vault_folders', 'list_views'])
 
 function isVaultLoadCommand(cmd: string) {
   return cmd === 'list_vault' || cmd === 'reload_vault'
@@ -139,6 +143,23 @@ async function enableTauriMode() {
   )
 }
 
+function buildMountedWorkspaceLoadMock() {
+  return ((cmd: string, args?: Record<string, unknown>) => {
+    if (isVaultLoadCommand(cmd)) {
+      const path = args?.path
+      return Promise.resolve([{
+        ...mockEntries[0],
+        path: `${path}/note/hello.md`,
+        title: path === '/team' ? 'Team Hello' : 'Personal Hello',
+      }])
+    }
+    if (EMPTY_ARRAY_COMMANDS.has(cmd)) {
+      return Promise.resolve([])
+    }
+    return Promise.resolve(null)
+  }) as typeof defaultMockInvoke
+}
+
 describe('useVaultLoader', () => {
   beforeEach(() => {
     mockIsTauri = false
@@ -150,6 +171,435 @@ describe('useVaultLoader', () => {
     const { result } = await renderVaultLoader()
 
     expect(result.current.entries[0].title).toBe('Hello')
+  })
+
+  it('loads entries from every mounted workspace and annotates provenance', async () => {
+    backendInvokeFn.mockImplementation(buildMountedWorkspaceLoadMock())
+
+    const vaults = [
+      { label: 'Personal', path: '/personal', alias: 'personal', available: true, mounted: true },
+      { label: 'Team', path: '/team', alias: 'team', available: true, mounted: true },
+    ]
+    const { result } = renderHook(() => useVaultLoader('/personal', vaults, '/personal'))
+
+    await waitForEntries(result, 2)
+
+    expect(result.current.entries.map((entry) => entry.workspace?.alias).sort()).toEqual(['personal', 'team'])
+    expect(result.current.entries.find((entry) => entry.workspace?.alias === 'team')?.workspace?.defaultForNewNotes).toBe(false)
+  })
+
+  it('loads one folder root per mounted workspace when folder vaults are provided', async () => {
+    const vaults = [
+      { label: 'Personal', path: '/personal', alias: 'personal', available: true, mounted: true },
+      { label: 'Team', path: '/team', alias: 'team', available: true, mounted: true },
+    ]
+    backendInvokeFn.mockImplementation(((cmd: string, args?: Record<string, unknown>) => {
+      if (isVaultLoadCommand(cmd)) {
+        const path = args?.path
+        return Promise.resolve([{ ...mockEntries[0], path: `${path}/note/hello.md` }])
+      }
+      if (cmd === 'list_vault_folders') {
+        const path = args?.path
+        return Promise.resolve([
+          { name: path === '/team' ? 'team-projects' : 'personal-projects', path: 'projects', children: [] },
+        ])
+      }
+      if (cmd === 'list_views' || cmd === 'get_modified_files') return Promise.resolve([])
+      return Promise.resolve(null)
+    }) as typeof defaultMockInvoke)
+
+    const { result } = renderHook(() => useVaultLoader('/personal', vaults, '/personal', vaults))
+
+    await waitForEntries(result, 2)
+    await waitFor(() => {
+      expect(result.current.folders).toEqual([
+        {
+          name: 'Personal',
+          path: '',
+          rootPath: '/personal',
+          children: [{ name: 'personal-projects', path: 'projects', rootPath: '/personal', children: [] }],
+        },
+        {
+          name: 'Team',
+          path: '',
+          rootPath: '/team',
+          children: [{ name: 'team-projects', path: 'projects', rootPath: '/team', children: [] }],
+        },
+      ])
+    })
+  })
+
+  it('does not re-add the base vault as a folder root after it is unmounted', async () => {
+    const entryVaults = [
+      { label: 'Brian', path: '/brian', alias: 'brian', available: true, mounted: false },
+      { label: 'Laputa', path: '/laputa', alias: 'laputa', available: true, mounted: true },
+    ]
+    const folderVaults = [entryVaults[1]]
+    backendInvokeFn.mockImplementation(((cmd: string, args?: Record<string, unknown>) => {
+      if (isVaultLoadCommand(cmd)) {
+        const path = args?.path
+        return Promise.resolve([{ ...mockEntries[0], path: `${path}/note/hello.md` }])
+      }
+      if (cmd === 'list_vault_folders') {
+        const path = args?.path
+        return Promise.resolve([
+          { name: path === '/brian' ? 'brian-projects' : 'laputa-projects', path: 'projects', children: [] },
+        ])
+      }
+      if (cmd === 'list_views' || cmd === 'get_modified_files') return Promise.resolve([])
+      return Promise.resolve(null)
+    }) as typeof defaultMockInvoke)
+
+    const { result } = renderHook(() => useVaultLoader('/brian', entryVaults, '/laputa', folderVaults))
+
+    await waitForEntries(result, 2)
+    await waitFor(() => {
+      expect(result.current.folders).toEqual([
+        {
+          name: 'Laputa',
+          path: '',
+          rootPath: '/laputa',
+          children: [{ name: 'laputa-projects', path: 'projects', rootPath: '/laputa', children: [] }],
+        },
+      ])
+    })
+  })
+
+  it('updates workspace default metadata without reloading vault contents', async () => {
+    backendInvokeFn.mockImplementation(buildMountedWorkspaceLoadMock())
+    const vaults = [
+      { label: 'Personal', path: '/personal', alias: 'personal', available: true, mounted: true },
+      { label: 'Team', path: '/team', alias: 'team', available: true, mounted: true },
+    ]
+    const { result, rerender } = renderHook(
+      ({ defaultPath }) => useVaultLoader('/personal', vaults, defaultPath, vaults),
+      { initialProps: { defaultPath: '/personal' } },
+    )
+
+    await waitForEntries(result, 2)
+    const vaultLoadCalls = backendInvokeFn.mock.calls.filter(([command]) => isVaultLoadCommand(command)).length
+    const folderLoadCalls = backendInvokeFn.mock.calls.filter(([command]) => command === 'list_vault_folders').length
+
+    rerender({ defaultPath: '/team' })
+
+    await waitFor(() => {
+      expect(result.current.entries.find((entry) => entry.workspace?.path === '/team')?.workspace?.defaultForNewNotes).toBe(true)
+    })
+    expect(backendInvokeFn.mock.calls.filter(([command]) => isVaultLoadCommand(command))).toHaveLength(vaultLoadCalls)
+    expect(backendInvokeFn.mock.calls.filter(([command]) => command === 'list_vault_folders')).toHaveLength(folderLoadCalls)
+  })
+
+  it('loads a newly added workspace incrementally without clearing existing entries', async () => {
+    backendInvokeFn.mockImplementation(buildMountedWorkspaceLoadMock())
+    const personal = { label: 'Personal', path: '/personal', alias: 'personal', available: true, mounted: true }
+    const team = { label: 'Team', path: '/team', alias: 'team', available: true, mounted: true }
+    const { result, rerender } = renderHook(
+      ({ vaults }) => useVaultLoader('/personal', vaults, '/personal', vaults),
+      { initialProps: { vaults: [personal] } },
+    )
+
+    await waitForEntries(result, 1)
+    expect(result.current.entries.map((entry) => entry.workspace?.path)).toEqual(['/personal'])
+
+    rerender({ vaults: [personal, team] })
+
+    expect(result.current.entries.map((entry) => entry.workspace?.path)).toContain('/personal')
+    await waitForEntries(result, 2)
+    expect(result.current.entries.map((entry) => entry.workspace?.path).sort()).toEqual(['/personal', '/team'])
+  })
+
+  it('keeps preloaded workspace entries mounted when switching the visible vault', async () => {
+    backendInvokeFn.mockImplementation(buildMountedWorkspaceLoadMock())
+    const personal = { label: 'Personal', path: '/personal', alias: 'personal', available: true, mounted: true }
+    const team = { label: 'Team', path: '/team', alias: 'team', available: true, mounted: true }
+    const vaults = [personal, team]
+    const { result, rerender } = renderHook(
+      ({ path }) => useVaultLoader(path, vaults, path),
+      { initialProps: { path: '/personal' } },
+    )
+
+    await waitForEntries(result, 2)
+    const vaultLoadCalls = backendInvokeFn.mock.calls.filter(([command]) => isVaultLoadCommand(command)).length
+
+    rerender({ path: '/team' })
+
+    expect(result.current.isLoading).toBe(false)
+    expect(result.current.entries.map((entry) => entry.workspace?.path).sort()).toEqual(['/personal', '/team'])
+    await waitFor(() => {
+      expect(backendInvokeFn.mock.calls.filter(([command]) => isVaultLoadCommand(command))).toHaveLength(vaultLoadCalls)
+    })
+  })
+
+  it('reloads scoped folder roots when another mounted workspace is added', async () => {
+    const brian = { label: 'Brian', path: '/brian', alias: 'brian', available: true, mounted: true }
+    const laputa = { label: 'Laputa', path: '/laputa', alias: 'laputa', available: true, mounted: true }
+    const third = { label: 'Third', path: '/third', alias: 'third', available: true, mounted: true }
+    backendInvokeFn.mockImplementation(((cmd: string, args?: Record<string, unknown>) => {
+      const path = args?.path
+      if (isVaultLoadCommand(cmd)) return Promise.resolve([{ ...mockEntries[0], path: `${path}/note/hello.md` }])
+      if (cmd === 'list_vault_folders') {
+        const rootName = path === '/laputa'
+          ? 'laputa-root'
+          : path === '/third'
+            ? 'third-root'
+            : 'brian-root'
+        return Promise.resolve([{ name: rootName, path: 'root', children: [] }])
+      }
+      if (cmd === 'list_views' || cmd === 'get_modified_files') return Promise.resolve([])
+      return Promise.resolve(null)
+    }) as typeof defaultMockInvoke)
+    const { result, rerender } = renderHook(
+      ({ folderVaults }) => useVaultLoader('/brian', [brian, laputa, third], '/brian', folderVaults),
+      { initialProps: { folderVaults: [brian] } },
+    )
+
+    await waitForEntries(result, 3)
+    await waitFor(() => {
+      expect(result.current.folders.map((folder) => folder.name)).toEqual(['brian-root'])
+    })
+
+    rerender({ folderVaults: [brian, laputa] })
+
+    await waitFor(() => {
+      expect(result.current.folders.map((folder) => folder.rootPath)).toEqual(['/brian', '/laputa'])
+    })
+
+    rerender({ folderVaults: [brian, laputa, third] })
+
+    await waitFor(() => {
+      expect(result.current.folders.map((folder) => folder.rootPath)).toEqual(['/brian', '/laputa', '/third'])
+    })
+  })
+
+  it('adds each mounted workspace as soon as that workspace finishes loading', async () => {
+    let resolveLaputa: ((entries: VaultEntry[]) => void) | null = null
+    const brian = { label: 'Brian', path: '/brian', alias: 'brian', available: true, mounted: true }
+    const laputa = { label: 'Laputa', path: '/laputa', alias: 'laputa', available: true, mounted: true }
+    const team = { label: 'Team', path: '/team', alias: 'team', available: true, mounted: true }
+    const vaults = [brian, laputa, team]
+
+    backendInvokeFn.mockImplementation(((cmd: string, args?: Record<string, unknown>) => {
+      const path = args?.path
+      if (isVaultLoadCommand(cmd)) {
+        if (path === '/laputa') {
+          return new Promise<VaultEntry[]>((resolve) => {
+            resolveLaputa = resolve
+          })
+        }
+        return Promise.resolve([{ ...mockEntries[0], path: `${path}/note/hello.md` }])
+      }
+      if (cmd === 'list_vault_folders' || cmd === 'list_views' || cmd === 'get_modified_files') return Promise.resolve([])
+      return Promise.resolve(null)
+    }) as typeof defaultMockInvoke)
+
+    const { result } = renderHook(() => useVaultLoader('/brian', vaults, '/brian', vaults))
+
+    await waitFor(() => {
+      expect(result.current.entries.map((entry) => entry.workspace?.path).sort()).toEqual(['/brian', '/team'])
+    })
+
+    await act(async () => {
+      resolveLaputa?.([{ ...mockEntries[0], path: '/laputa/note/hello.md' }])
+    })
+
+    await waitFor(() => {
+      expect(result.current.entries.map((entry) => entry.workspace?.path).sort()).toEqual(['/brian', '/laputa', '/team'])
+    })
+  })
+
+  it('preserves mounted workspace entries that arrive while the active vault scan is pending', async () => {
+    const field = { label: 'Field Notes', path: '/field', alias: 'field', available: true, mounted: true }
+    const research = { label: 'Research Lab', path: '/research', alias: 'research', available: true, mounted: true }
+    const vaults = [field, research]
+    const fieldLoad = createDeferred<VaultEntry[]>()
+    backendInvokeFn.mockImplementation(((cmd: string, args?: Record<string, unknown>) => {
+      const path = args?.path
+      if (isVaultLoadCommand(cmd)) {
+        if (path === '/field') return fieldLoad.promise
+        return Promise.resolve([{ ...mockEntries[0], path: `${path}/note/hello.md` }])
+      }
+      if (cmd === 'list_vault_folders' || cmd === 'list_views' || cmd === 'get_modified_files') return Promise.resolve([])
+      return Promise.resolve(null)
+    }) as typeof defaultMockInvoke)
+
+    const { result } = renderHook(() => useVaultLoader('/field', vaults, '/field', vaults))
+
+    act(() => {
+      result.current.addEntry({
+        ...mockEntries[0],
+        path: '/research/note/hello.md',
+        title: 'Research Hello',
+        workspace: workspaceIdentityFromVault(research, { defaultWorkspacePath: '/field' }),
+      })
+    })
+
+    act(() => {
+      fieldLoad.resolve([{ ...mockEntries[0], path: '/field/note/hello.md', title: 'Field Hello' }])
+    })
+
+    await waitFor(() => {
+      expect(result.current.entries.map((entry) => entry.workspace?.path).sort()).toEqual(['/field', '/research'])
+    })
+  })
+
+  it('uses cached vault listing for background workspace loads in Tauri mode', async () => {
+    await enableTauriMode()
+    const brian = { label: 'Brian', path: '/brian', alias: 'brian', available: true, mounted: true }
+    const laputa = { label: 'Laputa', path: '/laputa', alias: 'laputa', available: true, mounted: true }
+    const vaults = [brian, laputa]
+
+    backendInvokeFn.mockImplementation(((cmd: string, args?: Record<string, unknown>) => {
+      if (isVaultLoadCommand(cmd)) {
+        const path = args?.path
+        return Promise.resolve([{ ...mockEntries[0], path: `${path}/note/hello.md` }])
+      }
+      if (cmd === 'list_vault_folders' || cmd === 'list_views' || cmd === 'get_modified_files') return Promise.resolve([])
+      return Promise.resolve(null)
+    }) as typeof defaultMockInvoke)
+
+    const { result } = renderHook(() => useVaultLoader('/brian', vaults, '/brian', vaults))
+
+    await waitForEntries(result, 2)
+
+    const laputaLoadCommands = backendInvokeFn.mock.calls
+      .filter(([, args]) => args?.path === '/laputa')
+      .map(([command]) => command)
+    expect(laputaLoadCommands).toContain('list_vault')
+    expect(laputaLoadCommands).not.toContain('reload_vault')
+  })
+
+  it('clears stale views immediately when switching to another preloaded workspace', async () => {
+    backendInvokeFn.mockImplementation(((cmd: string, args?: Record<string, unknown>) => {
+      const path = args?.path
+      if (isVaultLoadCommand(cmd)) return Promise.resolve([{ ...mockEntries[0], path: `${path}/note/hello.md` }])
+      if (cmd === 'list_views') {
+        return Promise.resolve(args?.vaultPath === '/brian'
+          ? [{ filename: 'brian.yml', definition: { name: 'Brian View', icon: null, color: null, sort: null, filters: { all: [] } } }]
+          : [])
+      }
+      if (cmd === 'list_vault_folders' || cmd === 'get_modified_files') return Promise.resolve([])
+      return Promise.resolve(null)
+    }) as typeof defaultMockInvoke)
+    const brian = { label: 'Brian', path: '/brian', alias: 'brian', available: true, mounted: true }
+    const laputa = { label: 'Laputa', path: '/laputa', alias: 'laputa', available: true, mounted: true }
+    const vaults = [brian, laputa]
+    const { result, rerender } = renderHook(
+      ({ path }) => useVaultLoader(path, vaults, path),
+      { initialProps: { path: '/brian' } },
+    )
+
+    await waitFor(() => {
+      expect(result.current.views.map((view) => view.filename)).toEqual(['brian.yml'])
+    })
+
+    rerender({ path: '/laputa' })
+
+    expect(result.current.views).toEqual([])
+    await waitFor(() => {
+      expect(result.current.views).toEqual([])
+    })
+  })
+
+  it('normalizes missing entry and view string metadata from vault load', async () => {
+    backendInvokeFn.mockImplementation(((cmd: string) => {
+      if (isVaultLoadCommand(cmd)) {
+        return Promise.resolve([
+          {
+            path: '/vault/note/missing-title.md',
+            filename: undefined,
+            title: undefined,
+            aliases: undefined,
+            outgoingLinks: undefined,
+            relationships: undefined,
+            properties: undefined,
+          },
+        ])
+      }
+      if (cmd === 'list_views') return Promise.resolve([{ filename: undefined, definition: {} }])
+      if (cmd === 'get_modified_files') return Promise.resolve([])
+      if (cmd === 'list_vault_folders') return Promise.resolve([])
+      return Promise.resolve(null)
+    }) as typeof defaultMockInvoke)
+
+    const { result } = renderHook(() => useVaultLoader('/vault'))
+
+    await waitForEntries(result)
+    await waitFor(() => {
+      expect(result.current.views).toHaveLength(1)
+    })
+
+    expect(result.current.entries[0]).toMatchObject({
+      path: '/vault/note/missing-title.md',
+      filename: 'missing-title.md',
+      title: 'missing-title',
+      aliases: [],
+      outgoingLinks: [],
+      relationships: {},
+      properties: {},
+    })
+    expect(result.current.views[0]).toMatchObject({
+      filename: 'view-1.yml',
+      definition: {
+        name: 'View 1',
+        icon: null,
+        color: null,
+        sort: null,
+        filters: { all: [] },
+      },
+    })
+  })
+
+  it('reports initial vault loading until the note scan resolves', async () => {
+    const entriesLoad = createDeferred<VaultEntry[]>()
+    backendInvokeFn.mockImplementation(((cmd: string) => {
+      if (isVaultLoadCommand(cmd)) return entriesLoad.promise
+      if (cmd === 'get_modified_files') return Promise.resolve([])
+      if (cmd === 'list_vault_folders') return Promise.resolve([])
+      if (cmd === 'list_views') return Promise.resolve([])
+      return Promise.resolve(null)
+    }) as typeof defaultMockInvoke)
+
+    const { result } = renderHook(() => useVaultLoader('/vault'))
+
+    expect(result.current.isLoading).toBe(true)
+
+    await act(async () => {
+      entriesLoad.resolve(mockEntries)
+      await entriesLoad.promise
+    })
+
+    await waitFor(() => {
+      expect(result.current.isLoading).toBe(false)
+    })
+  })
+
+  it('loads folders while the initial note scan is still pending', async () => {
+    const entriesLoad = createDeferred<VaultEntry[]>()
+    const folders: FolderNode[] = [{ name: 'Projects', path: 'Projects', children: [] }]
+    backendInvokeFn.mockImplementation(((cmd: string) => {
+      if (isVaultLoadCommand(cmd)) return entriesLoad.promise
+      if (cmd === 'get_modified_files') return Promise.resolve([])
+      if (cmd === 'list_vault_folders') return Promise.resolve(folders)
+      if (cmd === 'list_views') return Promise.resolve([])
+      return Promise.resolve(null)
+    }) as typeof defaultMockInvoke)
+
+    const { result } = renderHook(() => useVaultLoader('/vault'))
+
+    await waitFor(() => {
+      expect(result.current.folders).toEqual(folders)
+    })
+    expect(result.current.isLoading).toBe(true)
+
+    await act(async () => {
+      entriesLoad.resolve(mockEntries)
+      await entriesLoad.promise
+    })
+
+    await waitFor(() => {
+      expect(result.current.entries).toEqual(mockEntries)
+      expect(result.current.isLoading).toBe(false)
+    })
   })
 
   it('loads modified files on mount', async () => {
@@ -205,6 +655,60 @@ describe('useVaultLoader', () => {
     const issuedCommands = backendInvokeFn.mock.calls.map(([command]) => command)
     expect(issuedCommands).toContain('reload_vault')
     expect(issuedCommands).not.toContain('list_vault')
+  })
+
+  it('freshly reloads the active mounted workspace on startup in Tauri mode', async () => {
+    await enableTauriMode()
+    const brian = { label: 'Brian', path: '/brian', alias: 'brian', available: true, mounted: true }
+    const laputa = { label: 'Laputa', path: '/laputa', alias: 'laputa', available: true, mounted: true }
+    const vaults = [laputa, brian]
+
+    backendInvokeFn.mockImplementation(((cmd: string, args?: Record<string, unknown>) => {
+      if (cmd === 'reload_vault' && args?.path === '/laputa') {
+        return Promise.resolve([
+          { ...mockEntries[0], path: '/laputa/note/alpha.md', filename: 'alpha.md', title: 'Alpha' },
+        ])
+      }
+      if (cmd === 'list_vault' && args?.path === '/laputa') return Promise.resolve([])
+      if (cmd === 'list_vault_folders' || cmd === 'list_views' || cmd === 'get_modified_files') return Promise.resolve([])
+      return Promise.resolve(null)
+    }) as typeof defaultMockInvoke)
+
+    const { result } = renderHook(() => useVaultLoader('/laputa', vaults, '/laputa', vaults))
+
+    await waitFor(() => {
+      expect(result.current.entries.map((entry) => entry.title)).toEqual(['Alpha'])
+    })
+
+    const laputaLoadCommands = backendInvokeFn.mock.calls
+      .filter(([, args]) => args?.path === '/laputa')
+      .map(([command]) => command)
+    expect(laputaLoadCommands).toContain('reload_vault')
+    expect(laputaLoadCommands).not.toContain('list_vault')
+  })
+
+  it('marks the vault unavailable when the initial load finds a missing active vault', async () => {
+    const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {})
+    backendInvokeFn.mockImplementation(((cmd: string) => {
+      if (isVaultLoadCommand(cmd)) return Promise.reject(new Error('No such file or directory'))
+      if (cmd === 'check_vault_exists') return Promise.resolve(false)
+      if (cmd === 'get_modified_files') return Promise.resolve(mockModifiedFiles)
+      if (cmd === 'list_vault_folders') return Promise.reject(new Error('Active vault is not available'))
+      if (cmd === 'list_views') return Promise.reject(new Error('Active vault is not available'))
+      return Promise.resolve(null)
+    }) as typeof defaultMockInvoke)
+
+    const { result } = renderHook(() => useVaultLoader('/vault'))
+
+    await waitFor(() => {
+      expect(result.current.unavailableVaultPath).toBe('/vault')
+    })
+    expect(result.current.entries).toEqual([])
+    expect(result.current.folders).toEqual([])
+    expect(result.current.views).toEqual([])
+    expect(result.current.modifiedFiles).toEqual([])
+
+    warnSpy.mockRestore()
   })
 
   it('ignores stale reload_vault results after the vault path changes', async () => {
@@ -319,6 +823,32 @@ describe('useVaultLoader', () => {
       act(() => { result.current.updateEntry('/vault/note/nonexistent.md', { archived: true }) })
 
       expect(result.current.entries).toBe(entriesBefore)
+    })
+
+    it('keeps entry metadata safe when a stale reload patch has undefined fields', async () => {
+      const { result } = await renderVaultLoader()
+
+      act(() => {
+        result.current.updateEntry('/vault/note/hello.md', {
+          title: undefined,
+          filename: undefined,
+          aliases: undefined,
+          outgoingLinks: undefined,
+          relationships: undefined,
+          properties: undefined,
+          snippet: undefined,
+        } as unknown as Partial<VaultEntry>)
+      })
+
+      expect(result.current.entries[0]).toEqual(expect.objectContaining({
+        title: 'hello',
+        filename: 'hello.md',
+        aliases: [],
+        outgoingLinks: [],
+        relationships: {},
+        properties: {},
+        snippet: '',
+      }))
     })
   })
 
@@ -629,6 +1159,48 @@ describe('useVaultLoader', () => {
   })
 
   describe('loadModifiedFiles', () => {
+    it('coalesces overlapping modified-file refreshes while git status is in flight', async () => {
+      const firstStatus = createDeferred<ModifiedFile[]>()
+      const secondStatus = createDeferred<ModifiedFile[]>()
+      let statusCalls = 0
+      backendInvokeFn.mockImplementation(((cmd: string) => {
+        if (isVaultLoadCommand(cmd)) return Promise.resolve(mockEntries)
+        if (cmd === 'list_vault_folders' || cmd === 'list_views') return Promise.resolve([])
+        if (cmd === 'get_modified_files') {
+          statusCalls += 1
+          return statusCalls === 1 ? firstStatus.promise : secondStatus.promise
+        }
+        return Promise.resolve(null)
+      }) as typeof defaultMockInvoke)
+
+      const { result } = renderHook(() => useVaultLoader('/vault'))
+      await waitForEntries(result)
+
+      await act(async () => {
+        void result.current.loadModifiedFiles()
+        void result.current.loadModifiedFiles()
+        await Promise.resolve()
+      })
+
+      expect(statusCalls).toBe(1)
+
+      await act(async () => {
+        firstStatus.resolve([])
+        await Promise.resolve()
+      })
+
+      await waitFor(() => {
+        expect(statusCalls).toBe(2)
+      })
+
+      await act(async () => {
+        secondStatus.resolve(mockModifiedFiles)
+        await Promise.resolve()
+      })
+
+      await waitForModifiedFiles(result)
+    })
+
     it('refreshes modified files list', async () => {
       const { result } = await renderVaultLoader()
 
@@ -679,9 +1251,111 @@ describe('useVaultLoader', () => {
         title: 'Renamed',
       }))
     })
+
+    it('normalizes stale replacement metadata during reload-heavy note switching', async () => {
+      const { result } = await renderVaultLoader()
+
+      act(() => {
+        result.current.replaceEntry('/vault/note/hello.md', {
+          path: '/vault/note/reloaded.md',
+          title: undefined,
+          filename: undefined,
+          aliases: undefined,
+          outgoingLinks: undefined,
+          relationships: undefined,
+          properties: undefined,
+          snippet: undefined,
+        } as unknown as Partial<VaultEntry> & { path: string })
+      })
+
+      expect(result.current.entries[0]).toEqual(expect.objectContaining({
+        path: '/vault/note/reloaded.md',
+        filename: 'reloaded.md',
+        title: 'reloaded',
+        aliases: [],
+        outgoingLinks: [],
+        relationships: {},
+        properties: {},
+        snippet: '',
+      }))
+    })
   })
 
   describe('reloadVault', () => {
+    it('reports reload progress while reload_vault is pending', async () => {
+      const reload = createDeferred<VaultEntry[]>()
+      backendInvokeFn.mockImplementation(((cmd: string) => {
+        if (cmd === 'list_vault') return Promise.resolve(mockEntries)
+        if (cmd === 'reload_vault') return reload.promise
+        if (cmd === 'get_modified_files') return Promise.resolve([])
+        if (cmd === 'list_vault_folders') return Promise.resolve([])
+        if (cmd === 'list_views') return Promise.resolve([])
+        return Promise.resolve(null)
+      }) as typeof defaultMockInvoke)
+
+      const { result } = await renderVaultLoader()
+
+      let pendingReload: Promise<VaultEntry[]> | null = null
+      act(() => {
+        pendingReload = result.current.reloadVault()
+      })
+
+      expect(result.current.isReloading).toBe(true)
+
+      await act(async () => {
+        reload.resolve(mockEntries)
+        await pendingReload!
+      })
+
+      expect(result.current.isReloading).toBe(false)
+    })
+
+    it('serializes overlapping vault reloads and runs one trailing reload', async () => {
+      const firstReload = createDeferred<VaultEntry[]>()
+      const secondReload = createDeferred<VaultEntry[]>()
+      let reloadCalls = 0
+      backendInvokeFn.mockImplementation(((cmd: string) => {
+        if (cmd === 'list_vault') return Promise.resolve(mockEntries)
+        if (cmd === 'reload_vault') {
+          reloadCalls += 1
+          return reloadCalls === 1 ? firstReload.promise : secondReload.promise
+        }
+        if (cmd === 'get_modified_files' || cmd === 'list_vault_folders' || cmd === 'list_views') return Promise.resolve([])
+        return Promise.resolve(null)
+      }) as typeof defaultMockInvoke)
+
+      const { result } = await renderVaultLoader()
+
+      let firstReloadPromise: Promise<VaultEntry[]> | undefined
+      await act(async () => {
+        firstReloadPromise = result.current.reloadVault()
+        void result.current.reloadVault()
+        await Promise.resolve()
+      })
+
+      expect(reloadCalls).toBe(1)
+
+      await act(async () => {
+        firstReload.resolve([mockEntries[0]])
+        await firstReloadPromise
+      })
+
+      await waitFor(() => {
+        expect(reloadCalls).toBe(2)
+      })
+
+      await act(async () => {
+        secondReload.resolve([
+          { ...mockEntries[0], path: '/vault/note/trailing.md', filename: 'trailing.md', title: 'Trailing' },
+        ])
+        await Promise.resolve()
+      })
+
+      await waitFor(() => {
+        expect(result.current.entries[0]?.title).toBe('Trailing')
+      })
+    })
+
     it('refreshes entries from reload_vault and reloads modified files', async () => {
       const reloadedEntry = {
         ...mockEntries[0],
@@ -731,6 +1405,46 @@ describe('useVaultLoader', () => {
 
       expect(entries).toEqual([])
       expect(result.current.entries).toEqual(mockEntries)
+      warnSpy.mockRestore()
+    })
+
+    it('clears stale entries and marks the vault unavailable when the active vault disappears', async () => {
+      const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {})
+      const initialViews = [{
+        filename: 'work.yml',
+        definition: {
+          name: 'Work',
+          icon: null,
+          color: null,
+          order: null,
+          sort: null,
+          filters: { all: [] },
+        },
+      }]
+      backendInvokeFn.mockImplementation(((cmd: string) => {
+        if (cmd === 'list_vault') return Promise.resolve(mockEntries)
+        if (cmd === 'reload_vault') return Promise.reject(new Error('No such file or directory'))
+        if (cmd === 'check_vault_exists') return Promise.resolve(false)
+        if (cmd === 'get_modified_files') return Promise.resolve(mockModifiedFiles)
+        if (cmd === 'list_vault_folders') return Promise.resolve([{ name: 'note', path: '/vault/note', children: [] }])
+        if (cmd === 'list_views') return Promise.resolve(initialViews)
+        return Promise.resolve(null)
+      }) as typeof defaultMockInvoke)
+
+      const { result } = await renderVaultLoader()
+      await waitFor(() => expect(result.current.views).toHaveLength(1))
+
+      let entries: VaultEntry[] = []
+      await act(async () => {
+        entries = await result.current.reloadVault()
+      })
+
+      expect(entries).toEqual([])
+      expect(result.current.entries).toEqual([])
+      expect(result.current.folders).toEqual([])
+      expect(result.current.views).toEqual([])
+      expect(result.current.modifiedFiles).toEqual([])
+      expect(result.current.unavailableVaultPath).toBe('/vault')
       warnSpy.mockRestore()
     })
   })
@@ -795,77 +1509,84 @@ describe('useVaultLoader', () => {
 
 describe('resolveNoteStatus', () => {
   const mf = (path: string, status: string): ModifiedFile => ({ path, relativePath: path.replace('/vault/', ''), status })
+  const status = (
+    path: string,
+    newPaths: Set<string>,
+    modifiedFiles: ModifiedFile[],
+    pendingSavePaths?: Set<string>,
+    unsavedPaths?: Set<string>,
+  ) => resolveNoteStatus({ path, newPaths, modifiedFiles, pendingSavePaths, unsavedPaths })
 
   it('returns new when path is in newPaths (not yet on disk)', () => {
-    expect(resolveNoteStatus('/vault/x.md', new Set(['/vault/x.md']), [])).toBe('new')
+    expect(status('/vault/x.md', new Set(['/vault/x.md']), [])).toBe('new')
   })
 
   it('returns new for untracked files in git', () => {
-    expect(resolveNoteStatus('/vault/x.md', new Set(), [mf('/vault/x.md', 'untracked')])).toBe('new')
+    expect(status('/vault/x.md', new Set(), [mf('/vault/x.md', 'untracked')])).toBe('new')
   })
 
   it('returns new for added files in git', () => {
-    expect(resolveNoteStatus('/vault/x.md', new Set(), [mf('/vault/x.md', 'added')])).toBe('new')
+    expect(status('/vault/x.md', new Set(), [mf('/vault/x.md', 'added')])).toBe('new')
   })
 
   it('returns modified for git-modified files', () => {
-    expect(resolveNoteStatus('/vault/x.md', new Set(), [mf('/vault/x.md', 'modified')])).toBe('modified')
+    expect(status('/vault/x.md', new Set(), [mf('/vault/x.md', 'modified')])).toBe('modified')
   })
 
   it('returns clean for files not in git status', () => {
-    expect(resolveNoteStatus('/vault/x.md', new Set(), [])).toBe('clean')
+    expect(status('/vault/x.md', new Set(), [])).toBe('clean')
   })
 
   it('returns modified for deleted files so deleted previews keep diff affordances', () => {
-    expect(resolveNoteStatus('/vault/x.md', new Set(), [mf('/vault/x.md', 'deleted')])).toBe('modified')
+    expect(status('/vault/x.md', new Set(), [mf('/vault/x.md', 'deleted')])).toBe('modified')
   })
 
   it('returns clean for unsupported git statuses', () => {
-    expect(resolveNoteStatus('/vault/x.md', new Set(), [mf('/vault/x.md', 'renamed')])).toBe('clean')
+    expect(status('/vault/x.md', new Set(), [mf('/vault/x.md', 'renamed')])).toBe('clean')
   })
 
   it('newPaths takes priority over git modified', () => {
-    expect(resolveNoteStatus('/vault/x.md', new Set(['/vault/x.md']), [mf('/vault/x.md', 'modified')])).toBe('new')
+    expect(status('/vault/x.md', new Set(['/vault/x.md']), [mf('/vault/x.md', 'modified')])).toBe('new')
   })
 
   it('pendingSave takes priority over new status', () => {
     const pendingSave = new Set(['/vault/x.md'])
-    expect(resolveNoteStatus('/vault/x.md', new Set(['/vault/x.md']), [], pendingSave)).toBe('pendingSave')
+    expect(status('/vault/x.md', new Set(['/vault/x.md']), [], pendingSave)).toBe('pendingSave')
   })
 
   it('pendingSave takes priority over modified status', () => {
     const pendingSave = new Set(['/vault/x.md'])
-    expect(resolveNoteStatus('/vault/x.md', new Set(), [mf('/vault/x.md', 'modified')], pendingSave)).toBe('pendingSave')
+    expect(status('/vault/x.md', new Set(), [mf('/vault/x.md', 'modified')], pendingSave)).toBe('pendingSave')
   })
 
   it('pendingSave takes priority over clean status', () => {
     const pendingSave = new Set(['/vault/x.md'])
-    expect(resolveNoteStatus('/vault/x.md', new Set(), [], pendingSave)).toBe('pendingSave')
+    expect(status('/vault/x.md', new Set(), [], pendingSave)).toBe('pendingSave')
   })
 
   it('without pendingSavePaths parameter, behavior is unchanged', () => {
     // Omitting the optional parameter should produce the same results as before
-    expect(resolveNoteStatus('/vault/x.md', new Set(['/vault/x.md']), [])).toBe('new')
-    expect(resolveNoteStatus('/vault/x.md', new Set(), [mf('/vault/x.md', 'modified')])).toBe('modified')
-    expect(resolveNoteStatus('/vault/x.md', new Set(), [])).toBe('clean')
+    expect(status('/vault/x.md', new Set(['/vault/x.md']), [])).toBe('new')
+    expect(status('/vault/x.md', new Set(), [mf('/vault/x.md', 'modified')])).toBe('modified')
+    expect(status('/vault/x.md', new Set(), [])).toBe('clean')
   })
 
   it('empty pendingSavePaths set does not affect other statuses', () => {
     const emptyPending = new Set<string>()
-    expect(resolveNoteStatus('/vault/x.md', new Set(['/vault/x.md']), [], emptyPending)).toBe('new')
-    expect(resolveNoteStatus('/vault/x.md', new Set(), [mf('/vault/x.md', 'modified')], emptyPending)).toBe('modified')
-    expect(resolveNoteStatus('/vault/x.md', new Set(), [], emptyPending)).toBe('clean')
+    expect(status('/vault/x.md', new Set(['/vault/x.md']), [], emptyPending)).toBe('new')
+    expect(status('/vault/x.md', new Set(), [mf('/vault/x.md', 'modified')], emptyPending)).toBe('modified')
+    expect(status('/vault/x.md', new Set(), [], emptyPending)).toBe('clean')
   })
 
   it('unsaved takes priority over all other statuses', () => {
     const unsaved = new Set(['/vault/x.md'])
-    expect(resolveNoteStatus('/vault/x.md', new Set(['/vault/x.md']), [], undefined, unsaved)).toBe('unsaved')
-    expect(resolveNoteStatus('/vault/x.md', new Set(), [mf('/vault/x.md', 'modified')], undefined, unsaved)).toBe('unsaved')
-    expect(resolveNoteStatus('/vault/x.md', new Set(['/vault/x.md']), [], new Set(['/vault/x.md']), unsaved)).toBe('unsaved')
+    expect(status('/vault/x.md', new Set(['/vault/x.md']), [], undefined, unsaved)).toBe('unsaved')
+    expect(status('/vault/x.md', new Set(), [mf('/vault/x.md', 'modified')], undefined, unsaved)).toBe('unsaved')
+    expect(status('/vault/x.md', new Set(['/vault/x.md']), [], new Set(['/vault/x.md']), unsaved)).toBe('unsaved')
   })
 
   it('without unsavedPaths parameter, behavior is unchanged', () => {
-    expect(resolveNoteStatus('/vault/x.md', new Set(['/vault/x.md']), [])).toBe('new')
-    expect(resolveNoteStatus('/vault/x.md', new Set(), [mf('/vault/x.md', 'modified')])).toBe('modified')
+    expect(status('/vault/x.md', new Set(['/vault/x.md']), [])).toBe('new')
+    expect(status('/vault/x.md', new Set(), [mf('/vault/x.md', 'modified')])).toBe('modified')
   })
 })

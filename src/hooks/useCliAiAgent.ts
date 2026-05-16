@@ -1,26 +1,31 @@
 import { useEffect, useRef, useState, type Dispatch, type MutableRefObject, type SetStateAction } from 'react'
 import type { AiAgentId } from '../lib/aiAgents'
+import type { AiAgentPermissionMode } from '../lib/aiAgentPermissionMode'
+import type { AiTarget } from '../lib/aiTargets'
+import { getAgentDocsPath } from '../lib/agentDocsPath'
 import type { NoteReference } from '../utils/ai-context'
 import {
+  type AgentStatus,
   type AiAgentMessage,
 } from '../lib/aiAgentConversation'
+import type { AgentFileCallbacks } from '../lib/aiAgentFileOperations'
 import {
+  addAgentLocalMarker,
   clearAgentConversation,
   sendAgentMessage,
   type AiAgentSessionRuntime,
 } from '../lib/aiAgentSession'
 import type { ToolInvocation } from '../lib/aiAgentMessageState'
-import {
-  type AgentFileCallbacks,
-  type AgentStatus,
-} from './useAiAgent'
 
-export type { AgentFileCallbacks, AgentStatus } from './useAiAgent'
+export type { AgentFileCallbacks } from '../lib/aiAgentFileOperations'
+export type { AgentStatus } from '../lib/aiAgentConversation'
 export type { AiAgentMessage } from '../lib/aiAgentConversation'
 
 interface UseCliAiAgentOptions {
   agent: AiAgentId
+  target?: AiTarget
   agentReady: boolean
+  permissionMode: AiAgentPermissionMode
 }
 
 interface UseCliAiAgentRuntime extends AiAgentSessionRuntime {
@@ -62,21 +67,29 @@ function useCliAiAgentRuntime(fileCallbacks: AgentFileCallbacks | undefined): Us
 
 export function useCliAiAgent(
   vaultPath: string,
+  vaultPaths: string[] | undefined,
   contextPrompt: string | undefined,
   fileCallbacks: AgentFileCallbacks | undefined,
   options: UseCliAiAgentOptions,
 ) {
-  const { agent, agentReady } = options
+  const { agent, agentReady, target } = options
+  const { permissionMode } = options
   const runtime = useCliAiAgentRuntime(fileCallbacks)
   const { messages, status } = runtime
 
   async function sendMessage(text: string, references?: NoteReference[]): Promise<void> {
+    const agentDocsPath = await getAgentDocsPath()
+
     await sendAgentMessage({
       runtime,
       context: {
         agent,
+        agentDocsPath,
+        target,
         ready: agentReady,
         vaultPath,
+        vaultPaths,
+        permissionMode,
         systemPromptOverride: contextPrompt,
       },
       prompt: { text, references },
@@ -87,5 +100,9 @@ export function useCliAiAgent(
     clearAgentConversation(runtime)
   }
 
-  return { messages, status, sendMessage, clearConversation }
+  function addLocalMarker(text: string): void {
+    addAgentLocalMarker(runtime, text)
+  }
+
+  return { messages, status, sendMessage, clearConversation, addLocalMarker }
 }

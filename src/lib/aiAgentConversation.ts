@@ -11,10 +11,13 @@ import {
 import type { NoteReference } from '../utils/ai-context'
 import type { AiAgentId } from './aiAgents'
 import { getAiAgentDefinition } from './aiAgents'
+import type { AiAgentPermissionMode } from './aiAgentPermissionMode'
+import type { AiTarget } from './aiTargets'
 
 export interface AiAgentMessage {
   userMessage: string
   references?: NoteReference[]
+  localMarker?: string
   reasoning?: string
   reasoningDone?: boolean
   actions: AiAction[]
@@ -23,10 +26,16 @@ export interface AiAgentMessage {
   id?: string
 }
 
+export type AgentStatus = 'idle' | 'thinking' | 'tool-executing' | 'done' | 'error'
+
 export interface AgentExecutionContext {
   agent: AiAgentId
+  target?: AiTarget
   ready: boolean
   vaultPath: string
+  vaultPaths?: string[]
+  agentDocsPath?: string
+  permissionMode: AiAgentPermissionMode
   systemPromptOverride?: string
 }
 
@@ -36,13 +45,28 @@ export interface PendingUserPrompt {
 }
 
 function toChatHistory(messages: AiAgentMessage[]): ChatMessage[] {
-  return messages.flatMap((message) => {
+  return messages.filter((message) => !message.localMarker).flatMap((message) => {
     const history: ChatMessage[] = [{ role: 'user', content: message.userMessage, id: message.id ?? '' }]
     if (message.response) {
       history.push({ role: 'assistant', content: message.response, id: `${message.id}-resp` })
     }
     return history
   })
+}
+
+export function appendLocalMarker(
+  setMessages: Dispatch<SetStateAction<AiAgentMessage[]>>,
+  text: string,
+): void {
+  setMessages((current) => [
+    ...current,
+    {
+      userMessage: '',
+      localMarker: text,
+      actions: [],
+      id: nextMessageId(),
+    },
+  ])
 }
 
 export function createMissingAgentResponse(agent: AiAgentId): string {
@@ -90,7 +114,13 @@ export function buildFormattedMessage(
   messages: AiAgentMessage[],
   prompt: PendingUserPrompt,
 ): { formattedMessage: string; systemPrompt: string } {
-  const systemPrompt = context.systemPromptOverride ?? buildAgentSystemPrompt()
+  const systemPrompt = buildAgentSystemPrompt({
+    agent: context.agent,
+    agentDocsPath: context.agentDocsPath,
+    permissionMode: context.permissionMode,
+    vaultPaths: context.vaultPaths,
+    vaultContext: context.systemPromptOverride,
+  })
   const chatHistory = toChatHistory(messages.filter((message) => !message.isStreaming))
   const trimmedHistory = trimHistory(chatHistory, MAX_HISTORY_TOKENS)
 

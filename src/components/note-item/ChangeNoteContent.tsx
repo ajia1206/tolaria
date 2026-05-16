@@ -1,8 +1,6 @@
 import { cn } from '@/lib/utils'
 import type { VaultEntry } from '../../types'
 import { NoteTitleIcon } from '../NoteTitleIcon'
-import { useI18n } from '../../lib/useI18n'
-import { translateVaultDisplayText } from '../../lib/vaultDisplay'
 
 type ChangeStatus = 'modified' | 'added' | 'deleted' | 'untracked' | 'renamed'
 
@@ -30,7 +28,7 @@ function readChangeStats(entry: VaultEntry): Required<Pick<ChangeStatsEntry, '__
 }
 
 function ChangeStatusIcon({ status }: { status: ChangeStatus }) {
-  const display = CHANGE_STATUS_DISPLAY[status]
+  const display = Reflect.get(CHANGE_STATUS_DISPLAY, status) as typeof CHANGE_STATUS_DISPLAY[ChangeStatus]
   return (
     <span
       className="absolute right-3 top-2.5 text-xs font-bold"
@@ -129,8 +127,6 @@ export function ChangeNoteContent({
   isSelected: boolean
   isDeletedChange: boolean
 }) {
-  const { locale } = useI18n()
-
   return (
     <>
       <ChangeStatusIcon status={changeStatus} />
@@ -145,7 +141,7 @@ export function ChangeNoteContent({
             data-testid="change-note-title"
           >
             <NoteTitleIcon icon={entry.icon} size={15} className="mr-1" testId="change-note-icon" />
-            {translateVaultDisplayText(locale, entry.title)}
+            {entry.title}
           </div>
           <div
             className={cn('truncate text-[12px] leading-[1.5] text-muted-foreground', isDeletedChange && 'opacity-70')}

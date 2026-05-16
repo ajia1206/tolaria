@@ -1,6 +1,6 @@
 import type { ComponentProps } from 'react'
 import { describe, it, expect, vi, beforeEach } from 'vitest'
-import { render as rtlRender, screen, fireEvent, act } from '@testing-library/react'
+import { render as rtlRender, screen, fireEvent, act, within } from '@testing-library/react'
 import { DynamicRelationshipsPanel, BacklinksPanel, ReferencedByPanel, GitHistoryPanel, InstancesPanel } from './InspectorPanels'
 import { TooltipProvider } from './ui/tooltip'
 import type { ReferencedByItem } from './InspectorPanels'
@@ -35,6 +35,23 @@ const makeEntry = (overrides: Partial<VaultEntry> = {}): VaultEntry => ({
   template: null, sort: null,
   outgoingLinks: [],
   ...overrides,
+})
+
+const makeWorkspace = (
+  alias: string,
+  path: string,
+  label = alias,
+): NonNullable<VaultEntry['workspace']> => ({
+  id: alias,
+  label,
+  alias,
+  path,
+  shortLabel: label.slice(0, 2).toUpperCase(),
+  color: null,
+  icon: null,
+  mounted: true,
+  available: true,
+  defaultForNewNotes: false,
 })
 
 describe('DynamicRelationshipsPanel', () => {
@@ -125,6 +142,35 @@ describe('DynamicRelationshipsPanel', () => {
     expect(screen.getByText('Related to')).toBeInTheDocument()
   })
 
+  it('shows missing type-defined relationships as editable placeholders', () => {
+    const bookType = makeEntry({
+      path: '/vault/book.md',
+      filename: 'book.md',
+      title: 'Book',
+      isA: 'Type',
+      relationships: {
+        Mentor: ['[[person/alice]]'],
+      },
+    })
+
+    renderRelationshipsPanel({
+      entry: makeEntry({ title: 'Dune', isA: 'Book' }),
+      entries: [...entries, bookType],
+      frontmatter: {},
+      onAddProperty,
+    })
+
+    const placeholder = screen.getByTestId('type-derived-relationship')
+    expect(within(placeholder).getByText('Mentor')).toHaveClass('text-muted-foreground/40')
+    fireEvent.click(within(placeholder).getByTestId('add-relation-ref'))
+    fireEvent.change(within(placeholder).getByTestId('add-relation-ref-input'), {
+      target: { value: 'My Project' },
+    })
+    fireEvent.keyDown(within(placeholder).getByTestId('add-relation-ref-input'), { key: 'Enter' })
+
+    expect(onAddProperty).toHaveBeenCalledWith('Mentor', '[[project/my-project]]')
+  })
+
   it('navigates when clicking a relationship link', () => {
     render(
       <DynamicRelationshipsPanel
@@ -172,6 +218,40 @@ describe('DynamicRelationshipsPanel', () => {
     fireEvent.change(screen.getByPlaceholderText('Note title'), { target: { value: 'AI' } })
     fireEvent.click(screen.getByTestId('submit-add-relationship'))
     expect(onAddProperty).toHaveBeenCalledWith('Related to', '[[topic/ai]]')
+  })
+
+  it('prefixes selected cross-workspace relationship targets from the add form', () => {
+    const personal = makeWorkspace('personal', '/personal', 'Personal')
+    const team = makeWorkspace('team', '/team', 'Team')
+    const source = makeEntry({
+      path: '/personal/source.md',
+      filename: 'source.md',
+      title: 'Source',
+      workspace: personal,
+    })
+    const remote = makeEntry({
+      path: '/team/topic/remote.md',
+      filename: 'remote.md',
+      title: 'Remote',
+      workspace: team,
+    })
+
+    renderRelationshipsPanel({
+      entry: source,
+      entries: [source, remote, ...entries],
+      vaultPath: '/personal',
+      onAddProperty,
+    })
+    fireEvent.click(screen.getByText('+ Add relationship'))
+    fireEvent.change(screen.getByPlaceholderText('Relationship name'), { target: { value: 'Mentions' } })
+    const noteInput = screen.getByPlaceholderText('Note title')
+    fireEvent.focus(noteInput)
+    fireEvent.change(noteInput, { target: { value: 'Remote' } })
+    expect(screen.getByTestId('note-search-workspace-badge')).toHaveTextContent('TE')
+    fireEvent.click(screen.getByText('Remote'))
+    fireEvent.click(screen.getByTestId('submit-add-relationship'))
+
+    expect(onAddProperty).toHaveBeenCalledWith('Mentions', '[[team/topic/remote]]')
   })
 
   it('cancels add relationship form', () => {
@@ -350,6 +430,33 @@ describe('DynamicRelationshipsPanel', () => {
 
       expect(onUpdateProperty).toHaveBeenCalledWith('Belongs to', ['[[project/my-project]]', '[[topic/ai]]'])
       expect(screen.queryByTestId('add-relation-ref-input')).not.toBeInTheDocument()
+    })
+
+    it('prefixes inline cross-workspace relationship targets with the target workspace alias', () => {
+      const personal = makeWorkspace('personal', '/personal', 'Personal')
+      const team = makeWorkspace('team', '/team', 'Team')
+      const source = makeEntry({
+        path: '/personal/source.md',
+        filename: 'source.md',
+        title: 'Source',
+        workspace: personal,
+      })
+      const remote = makeEntry({
+        path: '/team/topic/remote.md',
+        filename: 'remote.md',
+        title: 'Remote',
+        workspace: team,
+      })
+
+      renderEditableRelationships({
+        entry: source,
+        entries: [source, remote, ...entries],
+        vaultPath: '/personal',
+      })
+      const input = openInlineAdd('Remote')
+      fireEvent.keyDown(input, { key: 'Enter' })
+
+      expect(onUpdateProperty).toHaveBeenCalledWith('Belongs to', ['[[project/my-project]]', '[[team/topic/remote]]'])
     })
 
     it('does not add duplicate refs', () => {

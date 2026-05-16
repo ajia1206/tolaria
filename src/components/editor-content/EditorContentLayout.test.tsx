@@ -4,7 +4,9 @@ import { describe, expect, it, vi } from 'vitest'
 import { EditorContentLayout } from './EditorContentLayout'
 
 vi.mock('../BreadcrumbBar', () => ({
-  BreadcrumbBar: () => <div data-testid="breadcrumb-bar" />,
+  BreadcrumbBar: ({ content, noteWidth }: { content?: string; noteWidth?: string }) => (
+    <div data-testid="breadcrumb-bar" data-content={content} data-note-width={noteWidth} />
+  ),
 }))
 
 vi.mock('../ArchivedNoteBanner', () => ({
@@ -63,6 +65,8 @@ function createModel(overrides: Record<string, unknown> = {}) {
     onEditorChange: vi.fn(),
     isDeletedPreview: false,
     rawLatestContentRef: { current: null },
+    noteWidth: 'normal',
+    onToggleNoteWidth: vi.fn(),
     forceRawMode: false,
     showAIChat: false,
     onToggleAIChat: vi.fn(),
@@ -98,5 +102,44 @@ describe('EditorContentLayout', () => {
 
     expect(container.querySelector('.animate-pulse')).not.toBeNull()
     expect(screen.queryByTestId('title-field-input')).not.toBeInTheDocument()
+  })
+
+  it('marks the editor content root and breadcrumb with the note width mode', () => {
+    const { container } = render(<EditorContentLayout {...createModel({ noteWidth: 'wide' })} />)
+
+    expect(container.firstElementChild).toHaveClass('editor-content-width--wide')
+    expect(screen.getByTestId('breadcrumb-bar')).toHaveAttribute('data-note-width', 'wide')
+  })
+
+  it('passes the active note content into the breadcrumb', () => {
+    render(<EditorContentLayout {...createModel({
+      activeTab: {
+        entry: {
+          path: '/vault/project/ref-570.md',
+          filename: 'ref-570.md',
+          title: 'Reference Planning Notes',
+        },
+        content: '---\ntitle: Reference Planning Notes\n---\n\nBody',
+      },
+    })} />)
+
+    expect(screen.getByTestId('breadcrumb-bar')).toHaveAttribute(
+      'data-content',
+      '---\ntitle: Reference Planning Notes\n---\n\nBody',
+    )
+  })
+
+  it('keeps raw mode out of the rich-editor content wrapper', () => {
+    render(<EditorContentLayout {...createModel({
+      effectiveRawMode: true,
+      showEditor: false,
+      noteWidth: 'normal',
+    })} />)
+
+    const rawEditor = screen.getByTestId('raw-editor-view')
+    const findScope = rawEditor.closest('[data-editor-find-scope="true"]')
+
+    expect(findScope).toHaveClass('editor-scroll-area')
+    expect(rawEditor.closest('.editor-content-wrapper')).toBeNull()
   })
 })

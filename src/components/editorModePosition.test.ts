@@ -12,13 +12,14 @@ import {
 interface MockBlock {
   id: string
   markdown: string
+  content?: unknown
 }
 
 const content = '---\ntitle: Demo\n---\n# Title\n\nParagraph one\n\n## Tail'
 const blocks: MockBlock[] = [
-  { id: 'title', markdown: '# Title' },
-  { id: 'details', markdown: 'Paragraph one' },
-  { id: 'tail', markdown: '## Tail' },
+  { id: 'title', markdown: '# Title', content: [] },
+  { id: 'details', markdown: 'Paragraph one', content: [] },
+  { id: 'tail', markdown: '## Tail', content: [] },
 ]
 
 function makeEditor(blocks: MockBlock[]): BlockNotePositionEditor {
@@ -129,6 +130,40 @@ describe('editorModePosition', () => {
     expect(focus).toHaveBeenCalled()
   })
 
+  it('clamps stale raw-editor restore selections to the current document', () => {
+    const shortContent = '# Short'
+    const dispatch = vi.fn((spec: { selection: { anchor: number; head: number } }) => {
+      if (spec.selection.anchor > shortContent.length || spec.selection.head > shortContent.length) {
+        throw new RangeError('Selection points outside of document')
+      }
+    })
+    const view: CodeMirrorViewLike = {
+      state: {
+        doc: { toString: () => shortContent },
+        selection: { main: { anchor: 0, head: 0 } },
+      },
+      scrollDOM: { scrollTop: 0 },
+      dispatch,
+      focus: vi.fn(),
+    }
+    installRawView(view)
+
+    const restored = restoreCodeMirrorView(document, {
+      anchor: 500,
+      head: 800,
+      scrollTop: 12,
+    })
+
+    expect(restored).toBe(true)
+    expect(dispatch).toHaveBeenCalledWith({
+      selection: {
+        anchor: shortContent.length,
+        head: shortContent.length,
+      },
+    })
+    expect(view.scrollDOM.scrollTop).toBe(12)
+  })
+
   it('maps a raw-editor cursor back to the nearest BlockNote block', () => {
     const paragraphOffset = content.indexOf('Paragraph one') + 5
     const { editor, restored } = captureAndRestoreRawSelection({
@@ -151,6 +186,38 @@ describe('editorModePosition', () => {
 
     expect(restored).toBe(true)
     expect(editor.setSelection).toHaveBeenCalledWith('title', 'tail')
+    expect(editor.focus).toHaveBeenCalled()
+  })
+
+  it('falls back to the nearest content block when raw restore lands on media', () => {
+    const contentWithMedia = '---\ntitle: Demo\n---\n# Title\n\n![media](media.png)\n\nParagraph tail'
+    const mediaBlocks: MockBlock[] = [
+      { id: 'title', markdown: '# Title', content: [] },
+      { id: 'image', markdown: '![media](media.png)' },
+      { id: 'tail', markdown: 'Paragraph tail', content: [] },
+    ]
+    const editor = makeEditor(mediaBlocks)
+    const view: CodeMirrorViewLike = {
+      state: {
+        doc: { toString: () => contentWithMedia },
+        selection: {
+          main: {
+            anchor: contentWithMedia.indexOf('![media]') + 3,
+            head: contentWithMedia.indexOf('![media]') + 3,
+          },
+        },
+      },
+      scrollDOM: { scrollTop: 48 },
+      dispatch: vi.fn(),
+      focus: vi.fn(),
+    }
+
+    installRawView(view)
+    const snapshot = captureRawEditorPositionSnapshot(document)
+    const restored = restoreBlockNoteView(editor, snapshot!, document)
+
+    expect(restored).toBe(true)
+    expect(editor.setTextCursorPosition).toHaveBeenCalledWith('tail', 'end')
     expect(editor.focus).toHaveBeenCalled()
   })
 })

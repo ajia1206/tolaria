@@ -2,6 +2,7 @@ import { useState, useRef, useEffect, useCallback } from 'react'
 import type { SearchResult } from '../types'
 import { invoke } from '@tauri-apps/api/core'
 import { isTauri, mockInvoke } from '../mock-tauri'
+import { GITIGNORED_VISIBILITY_CHANGED_EVENT } from '../lib/gitignoredVisibilityEvents'
 
 interface SearchResultData {
   title: string
@@ -42,7 +43,30 @@ function mapResults(raw: SearchResultData[]): SearchResult[] {
     })
 }
 
-export function useUnifiedSearch(vaultPath: string, active: boolean) {
+function useGitignoredVisibilitySearchRefresh({
+  active,
+  performSearch,
+  query,
+}: {
+  active: boolean
+  performSearch: (query: string) => void
+  query: string
+}) {
+  useEffect(() => {
+    if (typeof window === 'undefined') return
+
+    const handleGitignoredVisibilityChanged = () => {
+      if (active && query.trim()) performSearch(query)
+    }
+
+    window.addEventListener(GITIGNORED_VISIBILITY_CHANGED_EVENT, handleGitignoredVisibilityChanged)
+    return () => {
+      window.removeEventListener(GITIGNORED_VISIBILITY_CHANGED_EVENT, handleGitignoredVisibilityChanged)
+    }
+  }, [active, performSearch, query])
+}
+
+export function useUnifiedSearch(vaultPath: string | string[], active: boolean) {
   const [query, setQuery] = useState('')
   const [results, setResults] = useState<SearchResult[]>([])
   const [selectedIndex, setSelectedIndex] = useState(0)
@@ -74,10 +98,13 @@ export function useUnifiedSearch(vaultPath: string, active: boolean) {
     const gen = searchGenRef.current
     setLoading(true)
     try {
-      const response = await searchCall({ vaultPath, query: q, mode: 'keyword', limit: 20 })
+      const paths = Array.isArray(vaultPath) ? vaultPath : [vaultPath]
+      const responses = await Promise.all(paths
+        .filter((path) => path.trim().length > 0)
+        .map((path) => searchCall({ vaultPath: path, query: q, mode: 'keyword', limit: 20 })))
       if (gen !== searchGenRef.current) return
-      setResults(mapResults(response.results))
-      setElapsedMs(response.elapsed_ms)
+      setResults(mapResults(responses.flatMap((response) => response.results)).slice(0, 20))
+      setElapsedMs(responses.reduce((sum, response) => sum + response.elapsed_ms, 0))
       setSelectedIndex(0)
     } catch {
       if (gen !== searchGenRef.current) return
@@ -102,6 +129,12 @@ export function useUnifiedSearch(vaultPath: string, active: boolean) {
       debounceRef.current = null
     }
   }, [query, performSearch])
+
+  useGitignoredVisibilitySearchRefresh({
+    active,
+    performSearch: (nextQuery) => { void performSearch(nextQuery) },
+    query,
+  })
 
   return { query, setQuery, results, selectedIndex, setSelectedIndex, loading, elapsedMs }
 }

@@ -1,10 +1,7 @@
 import { describe, it, expect, vi } from 'vitest'
-import { resolveHeaderTitle, routeNoteClick, type ClickActions } from './noteListUtils'
+import { createNoteStatusResolver, resolveHeaderTitle, routeNoteClick, type ClickActions } from './noteListUtils'
+import type { ModifiedFile } from '../../types'
 import type { SidebarSelection, VaultEntry } from '../../types'
-import { translate } from '../../lib/i18nShared'
-import type { TranslationKey } from '../../lib/i18nMessages'
-
-const t = (key: TranslationKey) => translate('en', key)
 
 function makeEntry(path = '/test.md'): VaultEntry {
   return {
@@ -39,7 +36,27 @@ function makeMouseEvent(overrides: Partial<React.MouseEvent> = {}): React.MouseE
 describe('resolveHeaderTitle', () => {
   it('returns History for the pulse filter', () => {
     const selection: SidebarSelection = { kind: 'filter', filter: 'pulse' }
-    expect(resolveHeaderTitle(selection, null, t)).toBe('History')
+    expect(resolveHeaderTitle(selection, null)).toBe('History')
+  })
+
+  it('localizes built-in note list titles', () => {
+    const selection: SidebarSelection = { kind: 'filter', filter: 'archived' }
+    expect(resolveHeaderTitle(selection, null, [], 'zh-CN')).toBe('归档')
+  })
+
+  it('keeps user-authored view names unchanged', () => {
+    const selection: SidebarSelection = { kind: 'view', filename: 'custom.yml' }
+
+    expect(resolveHeaderTitle(selection, null, [{
+      filename: 'custom.yml',
+      definition: {
+        name: '客户',
+        icon: null,
+        color: null,
+        sort: null,
+        filters: { all: [] },
+      },
+    }], 'en')).toBe('客户')
   })
 })
 
@@ -85,5 +102,38 @@ describe('routeNoteClick', () => {
     routeNoteClick(entry, makeMouseEvent({ metaKey: true, shiftKey: true }), actions)
     expect(actions.onReplace).not.toHaveBeenCalled()
     expect(actions.onEnterNeighborhood).not.toHaveBeenCalled()
+  })
+})
+
+describe('createNoteStatusResolver', () => {
+  it('keeps transient note status ahead of repository status', () => {
+    const modifiedFiles: ModifiedFile[] = [{
+      path: '/vault/note.md',
+      relativePath: 'note.md',
+      status: 'modified',
+    }]
+    const resolver = createNoteStatusResolver(
+      () => 'unsaved',
+      modifiedFiles,
+      new Set(modifiedFiles.map((file) => file.path)),
+    )
+
+    expect(resolver('/vault/note.md')).toBe('unsaved')
+  })
+
+  it('uses modified files when active-vault status says the note is clean', () => {
+    const modifiedFiles: ModifiedFile[] = [{
+      path: '/other-vault/note.md',
+      relativePath: 'note.md',
+      status: 'untracked',
+      vaultPath: '/other-vault',
+    }]
+    const resolver = createNoteStatusResolver(
+      () => 'clean',
+      modifiedFiles,
+      new Set(modifiedFiles.map((file) => file.path)),
+    )
+
+    expect(resolver('/other-vault/note.md')).toBe('new')
   })
 })

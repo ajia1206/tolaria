@@ -1,16 +1,24 @@
 /** Utility functions for parsing wikilink syntax: [[target|display]] */
 
 import type { VaultEntry } from '../types'
+import { slugifyNoteStem } from './noteSlug'
+import { workspaceForEntry, workspacePathForEntry } from './workspaces'
+
+export type AbsoluteNotePath = string
+export type NoteTitleOrTarget = string
+export type VaultPath = string
+export type WikilinkReference = string
+export type WikilinkTarget = string
 
 /** Extracts the target path from a wikilink reference (strips [[ ]] and display text). */
-export function wikilinkTarget(ref: string): string {
+export function wikilinkTarget(ref: WikilinkReference): WikilinkTarget {
   const inner = ref.replace(/^\[\[|\]\]$/g, '')
   const pipeIdx = inner.indexOf('|')
   return pipeIdx !== -1 ? inner.slice(0, pipeIdx) : inner
 }
 
 /** Extracts the display label from a wikilink reference. Falls back to humanised path stem. */
-export function wikilinkDisplay(ref: string): string {
+export function wikilinkDisplay(ref: WikilinkReference): string {
   const inner = ref.replace(/^\[\[|\]\]$/g, '')
   const pipeIdx = inner.indexOf('|')
   if (pipeIdx !== -1) return inner.slice(pipeIdx + 1)
@@ -18,93 +26,152 @@ export function wikilinkDisplay(ref: string): string {
   return last.replace(/-/g, ' ').replace(/\b\w/g, (c) => c.toUpperCase())
 }
 
+function stripWindowsExtendedPathPrefix(path: AbsoluteNotePath | VaultPath): string {
+  return path
+    .replace(/^\\\\\?\\UNC\\/i, '//')
+    .replace(/^\\\\\?\\/, '')
+}
+
+function normalizeFilesystemPath(path: AbsoluteNotePath | VaultPath): string {
+  return stripWindowsExtendedPathPrefix(path)
+    .replace(/\\/g, '/')
+    .replace(/\/+$/g, '')
+}
+
+function withoutMarkdownExtension(pathStem: WikilinkTarget): WikilinkTarget {
+  return pathStem.replace(/\.md$/i, '')
+}
+
 /** Extract the vault-relative path stem (no leading slash, no .md extension). */
-export function relativePathStem(absolutePath: string, vaultPath: string): string {
-  const prefix = vaultPath.endsWith('/') ? vaultPath : vaultPath + '/'
-  if (absolutePath.startsWith(prefix)) return absolutePath.slice(prefix.length).replace(/\.md$/, '')
+export function relativePathStem(absolutePath: AbsoluteNotePath, vaultPath: VaultPath): WikilinkTarget {
+  const normalizedAbsolutePath = normalizeFilesystemPath(absolutePath)
+  const normalizedVaultPath = normalizeFilesystemPath(vaultPath)
+  const prefix = normalizedVaultPath.endsWith('/') ? normalizedVaultPath : normalizedVaultPath + '/'
+  if (normalizedAbsolutePath.toLowerCase().startsWith(prefix.toLowerCase())) {
+    return withoutMarkdownExtension(normalizedAbsolutePath.slice(prefix.length))
+  }
   // Fallback: just the filename stem
-  const filename = absolutePath.split('/').pop() ?? absolutePath
-  return filename.replace(/\.md$/, '')
+  const filename = normalizedAbsolutePath.split('/').pop() ?? normalizedAbsolutePath
+  return withoutMarkdownExtension(filename)
 }
 
 /** Slugify a human-readable title into the canonical wikilink filename stem. */
-export function slugifyWikilinkTarget(title: string): string {
-  const slug = title.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/(^-|-$)/g, '')
-  return slug || 'untitled'
+export const slugifyWikilinkTarget = slugifyNoteStem
+
+function shouldPrefixWorkspaceAlias(entryAlias?: string, sourceAlias?: string): boolean {
+  return !!entryAlias && !!sourceAlias && entryAlias !== sourceAlias
 }
 
 /** Build the canonical wikilink target for a vault entry. */
-export function canonicalWikilinkTargetForEntry(entry: VaultEntry, vaultPath: string): string {
-  return relativePathStem(entry.path, vaultPath)
+export function canonicalWikilinkTargetForEntry(entry: VaultEntry, vaultPath: VaultPath, sourceEntry?: VaultEntry): WikilinkTarget {
+  const entryWorkspace = workspaceForEntry(entry)
+  const sourceWorkspace = sourceEntry ? workspaceForEntry(sourceEntry) : null
+  const entryVaultPath = workspacePathForEntry(entry) ?? vaultPath
+  const localTarget = relativePathStem(entry.path, entryVaultPath)
+  const entryAlias = entryWorkspace?.alias
+  if (shouldPrefixWorkspaceAlias(entryAlias, sourceWorkspace?.alias)) {
+    return `${entryAlias}/${localTarget}`
+  }
+  return localTarget
 }
 
 /** Resolve a user-facing title/path input to the canonical wikilink target. */
 export function canonicalWikilinkTargetForTitle(
-  titleOrTarget: string,
+  titleOrTarget: NoteTitleOrTarget,
   entries: VaultEntry[],
-  vaultPath: string,
-): string {
+  vaultPath: VaultPath,
+  sourceEntry?: VaultEntry,
+): WikilinkTarget {
   const trimmed = titleOrTarget.trim()
-  const resolved = resolveEntry(entries, trimmed)
+  const resolved = resolveEntry(entries, trimmed, sourceEntry)
   return resolved
-    ? canonicalWikilinkTargetForEntry(resolved, vaultPath)
+    ? canonicalWikilinkTargetForEntry(resolved, vaultPath, sourceEntry)
     : trimmed.includes('/')
       ? trimmed.replace(/^\/+/, '').replace(/\.md$/, '')
       : slugifyWikilinkTarget(trimmed)
 }
 
 /** Wrap a target in wikilink syntax. */
-export function formatWikilinkRef(target: string): string {
+export function formatWikilinkRef(target: WikilinkTarget): WikilinkReference {
   return `[[${target}]]`
 }
 
 interface ResolutionKey {
   exactTarget: string
+  workspaceAlias: string | null
+  targetWithoutWorkspace: string
   lastSegment: string
   pathSuffix: string | null
   humanizedTarget: string | null
 }
 
-function buildResolutionKey(rawTarget: string): ResolutionKey {
+function buildResolutionKey(rawTarget: WikilinkTarget, knownWorkspaceAliases: Set<string> = new Set()): ResolutionKey {
   const exactTarget = rawTarget.includes('|') ? rawTarget.split('|')[0] : rawTarget
   const normalizedTarget = exactTarget.toLowerCase()
-  const lastSegment = exactTarget.includes('/') ? (exactTarget.split('/').pop() ?? exactTarget).toLowerCase() : normalizedTarget
+  const segments = exactTarget.split('/').filter(Boolean)
+  const candidateWorkspaceAlias = segments.length > 1 ? segments[0].toLowerCase() : null
+  const workspaceAlias = candidateWorkspaceAlias && knownWorkspaceAliases.has(candidateWorkspaceAlias)
+    ? candidateWorkspaceAlias
+    : null
+  const targetWithoutWorkspace = workspaceAlias ? segments.slice(1).join('/') : exactTarget
+  const normalizedLocalTarget = targetWithoutWorkspace.toLowerCase()
+  const lastSegment = targetWithoutWorkspace.includes('/') ? (targetWithoutWorkspace.split('/').pop() ?? targetWithoutWorkspace).toLowerCase() : normalizedLocalTarget
   const humanizedTarget = lastSegment.replace(/-/g, ' ')
 
   return {
     exactTarget: normalizedTarget,
+    workspaceAlias,
+    targetWithoutWorkspace: normalizedLocalTarget,
     lastSegment,
-    pathSuffix: exactTarget.includes('/') ? `/${normalizedTarget}.md` : null,
-    humanizedTarget: humanizedTarget === normalizedTarget ? null : humanizedTarget,
+    pathSuffix: targetWithoutWorkspace.includes('/') ? `/${normalizedLocalTarget}.md` : null,
+    humanizedTarget: humanizedTarget === normalizedLocalTarget ? null : humanizedTarget,
   }
 }
 
-function findEntryByPathSuffix(entries: VaultEntry[], pathSuffix: string | null): VaultEntry | undefined {
-  if (!pathSuffix) return undefined
+function filterEntriesByWorkspace(entries: VaultEntry[], alias: string | null): VaultEntry[] {
+  if (!alias) return entries
+  return entries.filter((entry) => workspaceForEntry(entry)?.alias.toLowerCase() === alias)
+}
+
+function prioritizeSourceWorkspace(entries: VaultEntry[], sourceEntry?: VaultEntry): VaultEntry[] {
+  const sourceWorkspace = sourceEntry ? workspaceForEntry(sourceEntry) : null
+  if (!sourceWorkspace) return entries
+  return [
+    ...entries.filter((entry) => workspaceForEntry(entry)?.alias === sourceWorkspace.alias),
+    ...entries.filter((entry) => workspaceForEntry(entry)?.alias !== sourceWorkspace.alias),
+  ]
+}
+
+function findEntryByPathSuffix(entries: VaultEntry[], resolutionKey: ResolutionKey): VaultEntry | undefined {
+  if (!resolutionKey.pathSuffix) return undefined
+  const { pathSuffix } = resolutionKey
   return entries.find(entry => entry.path.toLowerCase().endsWith(pathSuffix))
 }
 
-function findEntryByFilename(entries: VaultEntry[], { exactTarget, lastSegment }: ResolutionKey): VaultEntry | undefined {
+function findEntryByFilename(entries: VaultEntry[], { exactTarget, targetWithoutWorkspace, lastSegment }: ResolutionKey): VaultEntry | undefined {
   return entries.find((entry) => {
     const stem = entry.filename.replace(/\.md$/, '').toLowerCase()
-    return stem === exactTarget || stem === lastSegment
+    return stem === exactTarget || stem === targetWithoutWorkspace || stem === lastSegment
   })
 }
 
-function findEntryByAlias(entries: VaultEntry[], exactTarget: string): VaultEntry | undefined {
-  return entries.find(entry => entry.aliases.some(alias => alias.toLowerCase() === exactTarget))
+function findEntryByAlias(entries: VaultEntry[], resolutionKey: ResolutionKey): VaultEntry | undefined {
+  return entries.find(entry => entry.aliases.some((alias) => {
+    const normalizedAlias = alias.toLowerCase()
+    return normalizedAlias === resolutionKey.exactTarget || normalizedAlias === resolutionKey.targetWithoutWorkspace
+  }))
 }
 
-function findEntryByTitle(entries: VaultEntry[], exactTarget: string, lastSegment: string): VaultEntry | undefined {
+function findEntryByTitle(entries: VaultEntry[], resolutionKey: ResolutionKey): VaultEntry | undefined {
   return entries.find((entry) => {
     const lowerTitle = entry.title.toLowerCase()
-    return lowerTitle === exactTarget || lowerTitle === lastSegment
+    return lowerTitle === resolutionKey.exactTarget || lowerTitle === resolutionKey.targetWithoutWorkspace || lowerTitle === resolutionKey.lastSegment
   })
 }
 
-function findEntryByHumanizedTitle(entries: VaultEntry[], humanizedTarget: string | null): VaultEntry | undefined {
-  if (!humanizedTarget) return undefined
-  return entries.find(entry => entry.title.toLowerCase() === humanizedTarget)
+function findEntryByHumanizedTitle(entries: VaultEntry[], resolutionKey: ResolutionKey): VaultEntry | undefined {
+  if (!resolutionKey.humanizedTarget) return undefined
+  return entries.find(entry => entry.title.toLowerCase() === resolutionKey.humanizedTarget)
 }
 
 /**
@@ -117,13 +184,18 @@ function findEntryByHumanizedTitle(entries: VaultEntry[], humanizedTarget: strin
  *   4. Exact title match
  *   5. Humanized title match (kebab-case → words)
  */
-export function resolveEntry(entries: VaultEntry[], rawTarget: string): VaultEntry | undefined {
-  const resolutionKey = buildResolutionKey(rawTarget)
+export function resolveEntry(entries: VaultEntry[], rawTarget: WikilinkTarget, sourceEntry?: VaultEntry): VaultEntry | undefined {
+  const workspaceAliases = new Set(entries.map((entry) => workspaceForEntry(entry)?.alias.toLowerCase()).filter((alias): alias is string => !!alias))
+  const resolutionKey = buildResolutionKey(rawTarget, workspaceAliases)
+  const workspaceScopedEntries = filterEntriesByWorkspace(entries, resolutionKey.workspaceAlias)
+  const candidates = resolutionKey.workspaceAlias
+    ? workspaceScopedEntries
+    : prioritizeSourceWorkspace(entries, sourceEntry)
   return (
-    findEntryByPathSuffix(entries, resolutionKey.pathSuffix)
-    ?? findEntryByFilename(entries, resolutionKey)
-    ?? findEntryByAlias(entries, resolutionKey.exactTarget)
-    ?? findEntryByTitle(entries, resolutionKey.exactTarget, resolutionKey.lastSegment)
-    ?? findEntryByHumanizedTitle(entries, resolutionKey.humanizedTarget)
+    findEntryByPathSuffix(candidates, resolutionKey)
+    ?? findEntryByFilename(candidates, resolutionKey)
+    ?? findEntryByAlias(candidates, resolutionKey)
+    ?? findEntryByTitle(candidates, resolutionKey)
+    ?? findEntryByHumanizedTitle(candidates, resolutionKey)
   )
 }

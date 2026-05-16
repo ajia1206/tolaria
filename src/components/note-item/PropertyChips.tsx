@@ -2,6 +2,7 @@ import { createElement, useMemo, useState, type ComponentType, type MouseEvent, 
 import { Link } from '@phosphor-icons/react'
 import { cn } from '@/lib/utils'
 import type { VaultEntry } from '../../types'
+import { useDateDisplayFormat } from '../../hooks/useAppPreferences'
 import { resolveNoteIcon } from '../../utils/noteIcon'
 import { openExternalUrl } from '../../utils/url'
 import { resolvePropertyChipValues, type PropertyChipValue } from './propertyChipValues'
@@ -103,14 +104,15 @@ export function PropertyChips({
   typeEntryMap: Record<string, VaultEntry>
   onOpenNote: (entry: VaultEntry, event: MouseEvent) => void
 }) {
+  const dateDisplayFormat = useDateDisplayFormat()
   const chips = useMemo(() => {
     const result: { key: string; values: PropertyChipValue[] }[] = []
     for (const prop of displayProps) {
-      const values = resolvePropertyChipValues(entry, prop, allEntries, typeEntryMap)
+      const values = resolvePropertyChipValues(entry, prop, { allEntries, typeEntryMap, dateDisplayFormat })
       if (values.length > 0) result.push({ key: prop, values })
     }
     return result
-  }, [allEntries, displayProps, entry, typeEntryMap])
+  }, [allEntries, dateDisplayFormat, displayProps, entry, typeEntryMap])
 
   if (chips.length === 0) return null
 

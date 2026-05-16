@@ -6,10 +6,10 @@ import {
   type AppUpdateDownloadEvent,
   type AppUpdateMetadata,
 } from '../lib/appUpdater'
+import { formatCalendarVersionForDisplay } from '../utils/calendarVersion'
 import { openExternalUrl } from '../utils/url'
 
 const RELEASE_NOTES_URL = 'https://refactoringhq.github.io/tolaria/'
-const CALENDAR_VERSION_PATTERN = /^(\d{4})\.(\d{1,2})\.(\d{1,2})(?:-(alpha|stable)\.(\d+))?$/
 
 interface UpdateVersionInfo {
   version: string
@@ -18,6 +18,7 @@ interface UpdateVersionInfo {
 
 export type UpdateStatus =
   | { state: 'idle' }
+  | { state: 'checking' }
   | ({ state: 'available'; notes: string | undefined } & UpdateVersionInfo)
   | ({ state: 'downloading'; progress: number } & UpdateVersionInfo)
   | ({ state: 'ready' } & UpdateVersionInfo)
@@ -40,17 +41,7 @@ function formatReleaseDisplayVersion(version: string): string {
   if (!normalizedVersion) return normalizedVersion
 
   const baseVersion = normalizedVersion.split('+')[0]
-  const match = baseVersion.match(CALENDAR_VERSION_PATTERN)
-  if (!match) return baseVersion
-
-  const [, year, month, day, channel, sequence] = match
-  const calendarVersion = `${Number(year)}.${Number(month)}.${Number(day)}`
-
-  if (channel === 'alpha' && sequence) {
-    return `Alpha ${calendarVersion}.${Number(sequence)}`
-  }
-
-  return calendarVersion
+  return formatCalendarVersionForDisplay(baseVersion) ?? baseVersion
 }
 
 function createVersionInfo(version: string): UpdateVersionInfo {
@@ -111,6 +102,8 @@ export function useUpdater(
   const checkForUpdates = useCallback(async (): Promise<UpdateCheckResult> => {
     if (!isTauri()) return { kind: 'up-to-date' }
 
+    setStatus({ state: 'checking' })
+
     try {
       const update = await checkForAppUpdate(releaseChannel)
       if (!update) {
@@ -125,6 +118,7 @@ export function useUpdater(
       return { kind: 'available', ...versionInfo }
     } catch (error) {
       console.warn('[updater] Failed to check for updates')
+      setStatus({ state: 'error' })
       return { kind: 'error', message: buildUpdateCheckErrorMessage(error) }
     }
   }, [releaseChannel])
@@ -177,7 +171,8 @@ export async function restartApp(): Promise<void> {
   try {
     const { relaunch } = await import('@tauri-apps/plugin-process')
     await relaunch()
-  } catch {
+  } catch (error) {
+    void error
     console.warn('[updater] Failed to relaunch')
   }
 }
