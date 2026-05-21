@@ -102,6 +102,7 @@ const mockSavedSinceCommit = new Set<string>()
 
 let mockSettings: Settings = {
   auto_pull_interval_minutes: 5,
+  git_enabled: null,
   autogit_enabled: false,
   autogit_idle_threshold_seconds: 90,
   autogit_inactive_threshold_seconds: 30,
@@ -464,6 +465,7 @@ export const mockHandlers: Record<string, (args: any) => any> = {
     opencode: { installed: false, version: null },
     pi: { installed: false, version: null },
     gemini: { installed: false, version: null },
+    kiro: { installed: false, version: null },
   }),
   get_agent_docs_path: () => '/mock/Tolaria/resources/agent-docs',
   get_vault_ai_guidance_status: () => ({ ...mockVaultAiGuidanceStatus }),
@@ -498,6 +500,7 @@ export const mockHandlers: Record<string, (args: any) => any> = {
     const s = args.settings
     mockSettings = {
       auto_pull_interval_minutes: s.auto_pull_interval_minutes ?? 5,
+      git_enabled: s.git_enabled ?? null,
       autogit_enabled: s.autogit_enabled ?? false,
       autogit_idle_threshold_seconds: s.autogit_idle_threshold_seconds ?? 90,
       autogit_inactive_threshold_seconds: s.autogit_inactive_threshold_seconds ?? 30,

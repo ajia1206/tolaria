@@ -1,9 +1,8 @@
-import { StrictMode } from 'react'
+import { lazy, StrictMode, Suspense } from 'react'
 import * as Sentry from '@sentry/react'
 import { createRoot } from 'react-dom/client'
 import { TooltipProvider } from '@/components/ui/tooltip'
 import './index.css'
-import App from './App.tsx'
 import { FrontendReadyMarker } from './components/FrontendReadyMarker'
 import { LinuxTitlebar } from './components/LinuxTitlebar'
 import { applyStoredThemeMode } from './lib/themeMode'
@@ -20,9 +19,11 @@ import {
 import { isRecoveredBlockNoteRenderError } from './components/blockNoteRenderRecovery'
 import { shouldUseLinuxWindowChrome } from './utils/platform'
 import { reloadFrontendOnceIfStartupFailed } from './utils/frontendReady'
+import { isNoteWindow } from './utils/windowMode'
 
-const EDITOR_DROP_SELECTOR = '.editor__blocknote-container'
 const TLDRAW_CONTEXT_MENU_SELECTOR = '.tldraw-whiteboard'
+
+const RootApp = lazy(() => (isNoteWindow() ? import('./NoteWindowApp') : import('./App.tsx')))
 
 function dataTransferHasFiles(dataTransfer: DataTransfer | null): boolean {
   if (!dataTransfer) return false
@@ -32,12 +33,7 @@ function dataTransferHasFiles(dataTransfer: DataTransfer | null): boolean {
   return Array.from(dataTransfer.items).some((item) => item.kind === 'file')
 }
 
-function isEditorDropTarget(target: EventTarget | null): boolean {
-  return target instanceof Element && target.closest(EDITOR_DROP_SELECTOR) !== null
-}
-
 function preventFileDropNavigation(event: DragEvent): void {
-  if (isEditorDropTarget(event.target)) return
   if (!dataTransferHasFiles(event.dataTransfer)) return
 
   event.preventDefault()
@@ -191,8 +187,10 @@ createRoot(document.getElementById('root')!, {
   <StrictMode>
     <TooltipProvider>
       <LinuxTitlebar />
-      <App />
-      <FrontendReadyMarker />
+      <Suspense fallback={null}>
+        <RootApp />
+        <FrontendReadyMarker />
+      </Suspense>
     </TooltipProvider>
   </StrictMode>,
 )

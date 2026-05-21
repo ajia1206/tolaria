@@ -14,10 +14,14 @@ const mocks = vi.hoisted(() => {
   const sentryHandler = vi.fn()
   const reactErrorHandler = vi.fn(() => sentryHandler)
   const getShortcutEventInit = vi.fn(() => ({ key: 'x' }))
+  const loadAppModule = vi.fn()
+  const renderApp = vi.fn()
 
   return {
     createRoot,
     getShortcutEventInit,
+    loadAppModule,
+    renderApp,
     reactErrorHandler,
     render,
     sentryHandler,
@@ -27,7 +31,13 @@ const mocks = vi.hoisted(() => {
 vi.mock('react-dom/client', () => ({ createRoot: mocks.createRoot }))
 vi.mock('@sentry/react', () => ({ reactErrorHandler: mocks.reactErrorHandler }))
 vi.mock('./App.tsx', () => ({
-  default: () => createElement('div', { 'data-testid': 'mock-app' }),
+  default: (() => {
+    mocks.loadAppModule()
+    return () => {
+      mocks.renderApp()
+      return createElement('div', { 'data-testid': 'mock-app' })
+    }
+  })(),
 }))
 vi.mock('@/components/ui/tooltip', () => ({
   TooltipProvider: ({ children }: { children: ReactNode }) => createElement('div', null, children),
@@ -169,6 +179,13 @@ describe('main entrypoint', () => {
     expect(hasElementTypeName(renderedTree(), 'FrontendReadyMarker')).toBe(true)
   })
 
+  it('defers app-shell module loading until React resolves the root app route', async () => {
+    await importEntrypoint()
+
+    expect(mocks.loadAppModule).not.toHaveBeenCalled()
+    expect(mocks.renderApp).not.toHaveBeenCalled()
+  })
+
   it('prevents browser navigation for file drags and still lets app drop handlers run', async () => {
     await importEntrypoint()
 
@@ -183,7 +200,7 @@ describe('main entrypoint', () => {
     expect(appDropHandler).toHaveBeenCalledWith(dropEvent)
   })
 
-  it('leaves editor file drags to the editor drop handler', async () => {
+  it('prevents browser navigation for editor file drags and still lets editor drop handlers run', async () => {
     await importEntrypoint()
 
     const editor = document.createElement('div')
@@ -191,12 +208,15 @@ describe('main entrypoint', () => {
     const editorChild = document.createElement('div')
     editor.appendChild(editorChild)
     document.body.appendChild(editor)
+    const editorDropHandler = vi.fn()
+    editor.addEventListener('drop', editorDropHandler, { once: true })
 
     const dragOverEvent = dispatchFileDragEvent(editorChild, 'dragover')
     const dropEvent = dispatchFileDragEvent(editorChild, 'drop')
 
-    expect(dragOverEvent.defaultPrevented).toBe(false)
-    expect(dropEvent.defaultPrevented).toBe(false)
+    expect(dragOverEvent.defaultPrevented).toBe(true)
+    expect(dropEvent.defaultPrevented).toBe(true)
+    expect(editorDropHandler).toHaveBeenCalledWith(dropEvent)
   })
 
   it('does not prevent app-internal drags without file payloads', async () => {

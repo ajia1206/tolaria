@@ -40,16 +40,25 @@ function permissionModeInstructions(
   return `Vault Safe mode is active. Do not use shell, terminal, Bash, Python/Node script execution, git, or command-line tools. If the user asks whether shell commands are available, say they are not available in Vault Safe. Use file/search/edit tools and Tolaria MCP tools instead.`
 }
 
-function agentDocsInstructions(agentDocsPath?: string): string {
+function agentDocsInstructions(
+  agentDocsPath: string | undefined,
+  canUseShell: boolean,
+): string {
   if (!agentDocsPath) {
     return `Read the vault's AGENTS.md when one exists before making vault-specific assumptions.`
   }
+
+  const searchInstruction = canUseShell
+    ? `Start with ${agentDocsPath}/index.md, then use ripgrep over that folder for specific concepts.`
+    : `Start with ${agentDocsPath}/index.md, then use the available file and search tools for specific concepts.`
 
   return `Read the vault's AGENTS.md when one exists before making vault-specific assumptions.
 For Tolaria product behavior, workflows, and user questions about how Tolaria works, search the bundled local docs at:
 ${agentDocsPath}
 
-Start with ${agentDocsPath}/index.md, then use ripgrep over that folder for specific concepts. Prefer bundled docs over guesses for Tolaria behavior.`
+${searchInstruction} Prefer bundled docs over guesses for Tolaria behavior.
+
+When the user asks how to improve a knowledge base, make it better organized, choose better types, model relationships, or make the vault easier for humans and agents to use, treat Portent as Tolaria's default best-practice model. Read ${agentDocsPath}/pages/templates/portent.md and combine it with Tolaria concepts for types, relationships, properties, Inbox, archive, and custom views.`
 }
 
 function vaultScopeInstructions(vaultPaths?: string[]): string {
@@ -77,10 +86,11 @@ Be concise and helpful. When you've completed a task, briefly summarize what you
 
 export function buildAgentSystemPrompt(options?: string | AgentSystemPromptOptions): string {
   const { vaultContext, agentDocsPath, permissionMode, agent, vaultPaths } = normalizePromptOptions(options)
+  const canUseShell = permissionMode === 'power_user' && agent !== 'pi'
   const prompt = [
     AGENT_SYSTEM_PREAMBLE,
     vaultScopeInstructions(vaultPaths),
-    agentDocsInstructions(agentDocsPath),
+    agentDocsInstructions(agentDocsPath, canUseShell),
     permissionModeInstructions(permissionMode, agent),
   ].join('\n\n')
 

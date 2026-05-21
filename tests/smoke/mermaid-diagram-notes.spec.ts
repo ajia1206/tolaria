@@ -5,7 +5,7 @@ import { createFixtureVaultCopy, openFixtureVault, removeFixtureVaultCopy } from
 import { executeCommand, openCommandPalette } from './helpers'
 import { RUNTIME_STYLE_NONCE } from '../../src/lib/runtimeStyleNonce'
 import { APP_COMMAND_IDS } from '../../src/hooks/appCommandCatalog'
-import { triggerShortcutCommand } from './testBridge'
+import { triggerMenuCommand, triggerShortcutCommand } from './testBridge'
 
 let tempVaultDir: string
 
@@ -192,6 +192,13 @@ async function expectRenderedDiagramCount(page: Page, count: number): Promise<vo
   await expect(page.locator('[data-testid="mermaid-diagram-viewport"] svg')).toHaveCount(count, { timeout: 15_000 })
 }
 
+async function reloadVault(page: Page): Promise<void> {
+  await triggerMenuCommand(page, APP_COMMAND_IDS.vaultReload)
+  await expect(page.getByText(/Vault reloaded \(\d+ entries\)/).last()).toBeVisible({
+    timeout: 5_000,
+  })
+}
+
 async function countLargeBlackFilledShapes(page: Page, diagramIndex: number): Promise<number> {
   return page.locator('[data-testid="mermaid-diagram-viewport"] svg').nth(diagramIndex).evaluate((svg) => {
     const shapes = Array.from(svg.querySelectorAll<SVGGraphicsElement>('rect,path,polygon'))
@@ -234,6 +241,37 @@ async function switchToResolvedTheme(page: Page, mode: 'dark' | 'light'): Promis
     await page.getByTestId('status-theme-mode').click()
   }
   await expect(root).toHaveAttribute('data-theme', mode)
+}
+
+async function setDocumentZoom(page: Page, percent: number): Promise<void> {
+  await page.evaluate((zoomPercent) => {
+    const factor = zoomPercent / 100
+    document.documentElement.style.setProperty('zoom', `${zoomPercent}%`)
+    document.documentElement.style.setProperty('--tolaria-overlay-zoom-factor', String(factor))
+    document.documentElement.style.setProperty('--tolaria-overlay-zoom-inverse', String(1 / factor))
+    window.dispatchEvent(new Event('laputa-zoom-change'))
+  }, percent)
+}
+
+async function readDialogViewportBounds(page: Page) {
+  return page.getByTestId('mermaid-diagram-dialog-viewport').evaluate((viewport) => {
+    const rect = viewport.getBoundingClientRect()
+    return {
+      width: rect.width,
+      height: rect.height,
+      windowWidth: window.innerWidth,
+      windowHeight: window.innerHeight,
+    }
+  })
+}
+
+async function dialogViewportFitsWindow(page: Page): Promise<boolean> {
+  const bounds = await readDialogViewportBounds(page)
+  const horizontallyContained = bounds.width <= bounds.windowWidth - 16
+  const verticallyContained = bounds.height <= bounds.windowHeight - 16
+  const stillFullscreenWidth = bounds.width >= bounds.windowWidth - 96
+  const stillFullscreenHeight = bounds.height >= bounds.windowHeight - 96
+  return horizontallyContained && verticallyContained && stillFullscreenWidth && stillFullscreenHeight
 }
 
 function mermaidNodeLabel(node: Locator): Locator {
@@ -320,6 +358,18 @@ test('fullscreen Mermaid diagrams keep the active Tolaria surface in dark mode',
   await expect.poll(() => computedCss(dialogViewport, 'background-color')).toBe(inlineBackground)
 })
 
+test('fullscreen Mermaid diagrams stay within the viewport while the app is zoomed', async ({ page }) => {
+  await openNote(page, 'Mermaid Reported')
+  await expectRenderedDiagramCount(page, 1)
+  await setDocumentZoom(page, 120)
+
+  await page.getByTestId('mermaid-diagram').first().hover()
+  await page.getByRole('button', { name: 'Open Mermaid diagram' }).first().click()
+  await expect(page.getByTestId('mermaid-diagram-dialog-viewport')).toBeVisible()
+
+  await expect.poll(() => dialogViewportFitsWindow(page)).toBe(true)
+})
+
 test('Mermaid diagrams stay mounted after property edits refresh frontmatter', async ({ page }) => {
   const pageErrors: string[] = []
   page.on('pageerror', error => pageErrors.push(error.message))
@@ -339,6 +389,21 @@ test('Mermaid diagrams stay mounted after property edits refresh frontmatter', a
   )).toMatch(/Date: "?2026-04-30"?/)
   await expectRenderedDiagramCount(page, 1)
   await expect(page.locator('[data-testid="mermaid-diagram-viewport"]').first()).toContainText('Linked to a planned shift?')
+  expect(pageErrors).toEqual([])
+})
+
+test('Mermaid diagram clicks stay stable while a vault reload settles', async ({ page }) => {
+  const pageErrors: string[] = []
+  page.on('pageerror', error => pageErrors.push(error.message))
+
+  await openNote(page, 'Mermaid Reported')
+  await expectRenderedDiagramCount(page, 1)
+  await reloadVault(page)
+  await mermaidSvg(page, 0).click()
+
+  await expectRenderedDiagramCount(page, 1)
+  await expect(page.locator('#tolaria-fatal-render-error')).toHaveCount(0)
+  await expect(mermaidSvg(page, 0)).toContainText('Linked to a planned shift?')
   expect(pageErrors).toEqual([])
 })
 
