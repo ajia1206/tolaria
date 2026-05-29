@@ -12,6 +12,7 @@ import type { NoteWidthMode, SidebarSelection, SidebarFilter, VaultEntry } from 
 import { requestAddRemote } from '../utils/addRemoteEvents'
 import type { NoteListFilter } from '../utils/noteListHelpers'
 import type { ViewMode } from './useViewMode'
+import type { ImmediateCreateOptions } from './useNoteCreation'
 import type { NoteListMultiSelectionCommands } from '../components/note-list/multiSelectionCommands'
 import type { GitRepositoryOption } from '../utils/gitRepositories'
 
@@ -27,9 +28,15 @@ interface AppCommandsConfig {
   onCommandPalette: () => void
   onSearch: () => void
   onFindInNote?: () => void
+  onUndo?: () => void
+  onRedo?: () => void
+  canUndo?: boolean
+  canRedo?: boolean
+  undoLabel?: string | null
+  redoLabel?: string | null
   onReplaceInNote?: () => void
   onPastePlainText: () => void
-  onCreateNote: () => void
+  onCreateNote: (type?: string, options?: ImmediateCreateOptions) => void
   onCreateNoteOfType: (type: string) => void
   onSave: () => void
   onOpenSettings: () => void
@@ -116,6 +123,7 @@ interface AppCommandsConfig {
   onOpenInNewWindow?: () => void
   onRevealActiveFile?: (path: string) => void
   onCopyActiveFilePath?: (path: string) => void
+  onCopyActiveDeepLink?: (path: string) => void
   onOpenActiveFileExternal?: (path: string) => void
   onRevealSelectedFolder?: () => void
   onCopySelectedFolderPath?: () => void
@@ -157,6 +165,12 @@ type CommandRegistryCoreActions = Pick<
   | 'onCreateNote'
   | 'onCreateNoteOfType'
   | 'onSave'
+  | 'onUndo'
+  | 'onRedo'
+  | 'canUndo'
+  | 'canRedo'
+  | 'undoLabel'
+  | 'redoLabel'
   | 'onFindInNote'
   | 'onReplaceInNote'
   | 'onPastePlainText'
@@ -211,6 +225,7 @@ type CommandRegistryVaultActions = Pick<
   | 'onOpenInNewWindow'
   | 'onRevealActiveFile'
   | 'onCopyActiveFilePath'
+  | 'onCopyActiveDeepLink'
   | 'onOpenActiveFileExternal'
   | 'onRestoreDeletedNote'
   | 'canRestoreDeletedNote'
@@ -266,6 +281,10 @@ function createKeyboardActions(
     onPastePlainText: config.onPastePlainText,
     onCreateNote: config.onCreateNote,
     onSave: config.onSave,
+    onUndo: config.onUndo,
+    onRedo: config.onRedo,
+    canUndo: config.canUndo,
+    canRedo: config.canRedo,
     onOpenSettings: config.onOpenSettings,
     onDeleteNote: config.onDeleteNote,
     onSetViewMode: config.onSetViewMode,
@@ -316,6 +335,8 @@ function createMenuEventActionHandlers(
   | 'onZoomReset'
   | 'onDeleteNote'
   | 'onFindInNote'
+  | 'onUndo'
+  | 'onRedo'
   | 'onReplaceInNote'
   | 'onPastePlainText'
   | 'onSearch'
@@ -343,6 +364,8 @@ function createMenuEventActionHandlers(
     onZoomReset: config.onZoomReset,
     onDeleteNote: config.onDeleteNote,
     onFindInNote: config.onFindInNote,
+    onUndo: config.onUndo,
+    onRedo: config.onRedo,
     onReplaceInNote: config.onReplaceInNote,
     onPastePlainText: config.onPastePlainText,
     onSearch: config.onSearch,
@@ -449,6 +472,12 @@ function createCommandRegistryCoreConfig(
     onCreateNote: config.onCreateNote,
     onCreateNoteOfType: config.onCreateNoteOfType,
     onSave: config.onSave,
+    onUndo: config.onUndo,
+    onRedo: config.onRedo,
+    canUndo: config.canUndo,
+    canRedo: config.canRedo,
+    undoLabel: config.undoLabel,
+    redoLabel: config.redoLabel,
     onOpenSettings: config.onOpenSettings,
     onOpenFeedback: config.onOpenFeedback,
     onDeleteNote: config.onDeleteNote,
@@ -507,6 +536,7 @@ function createCommandRegistryVaultConfig(
     onOpenInNewWindow: config.onOpenInNewWindow,
     onRevealActiveFile: config.onRevealActiveFile,
     onCopyActiveFilePath: config.onCopyActiveFilePath,
+    onCopyActiveDeepLink: config.onCopyActiveDeepLink,
     onOpenActiveFileExternal: config.onOpenActiveFileExternal,
     onRestoreDeletedNote: config.onRestoreDeletedNote,
     canRestoreDeletedNote: config.canRestoreDeletedNote,

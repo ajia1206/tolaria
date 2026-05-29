@@ -1,4 +1,4 @@
-import { SidebarSimple, X, Sparkle, WarningCircle, PencilSimple } from '@phosphor-icons/react'
+import { GearSix, X, Sparkle, WarningCircle, PencilSimple } from '@phosphor-icons/react'
 import { ActionTooltip } from '@/components/ui/action-tooltip'
 import { Button } from '@/components/ui/button'
 import { useDragRegion } from '../../hooks/useDragRegion'
@@ -32,15 +32,14 @@ export function InspectorHeader({ collapsed, frontmatterWarnings, locale = 'en',
   onToggle: () => void
   onOpenRawEditor?: () => void
 }) {
-  const { onMouseDown } = useDragRegion()
+  const { dragRegionRef } = useDragRegion<HTMLDivElement>()
   const propertiesTitle = translate(locale, 'inspector.title.properties')
   const showWarnings = Boolean(frontmatterWarnings && hasFrontmatterWarnings(frontmatterWarnings) && onOpenRawEditor)
   const propertiesIcon = (testId?: string) => (
-    <SidebarSimple
+    <GearSix
       size={16}
       weight="regular"
       className="shrink-0 text-muted-foreground"
-      style={{ transform: 'scaleX(-1)' }}
       data-testid={testId}
     />
   )
@@ -48,12 +47,12 @@ export function InspectorHeader({ collapsed, frontmatterWarnings, locale = 'en',
 
   return (
     <div
+      ref={dragRegionRef}
       className="flex shrink-0 items-center border-b border-border"
       style={{ height: 52, padding: '6px 12px', gap: 8, cursor: 'default' }}
-      onMouseDown={onMouseDown}
     >
       {collapsed ? (
-        <button
+        <button type="button"
           className="shrink-0 border-none bg-transparent p-1 text-muted-foreground cursor-pointer hover:text-foreground"
           onClick={onToggle}
           title={toggleLabel}
@@ -63,20 +62,13 @@ export function InspectorHeader({ collapsed, frontmatterWarnings, locale = 'en',
         </button>
       ) : (
         <>
-          <button
-            className="shrink-0 border-none bg-transparent p-1 text-muted-foreground cursor-pointer hover:text-foreground"
-            onClick={onToggle}
-            title={toggleLabel}
-            aria-label={toggleLabel}
-          >
-            {propertiesIcon('properties-panel-icon')}
-          </button>
+          {propertiesIcon('properties-panel-icon')}
           <span className="text-muted-foreground" style={{ fontSize: 13, fontWeight: 600 }}>{propertiesTitle}</span>
           {showWarnings && onOpenRawEditor && (
             <FrontmatterWarningsButton locale={locale} onOpenRawEditor={onOpenRawEditor} />
           )}
           <span className="flex-1" />
-          <button
+          <button type="button"
             className="shrink-0 border-none bg-transparent p-1 text-muted-foreground cursor-pointer hover:text-foreground"
             onClick={onToggle}
             title={toggleLabel}
@@ -99,7 +91,7 @@ export function InitializePropertiesPrompt({ locale = 'en', onClick }: { locale?
     <div className="flex flex-col items-center gap-3 rounded-lg border border-dashed border-border px-4 py-6">
       <Sparkle size={24} className="text-muted-foreground" />
       <p className="m-0 text-center text-[13px] text-muted-foreground">{translate(locale, 'inspector.empty.noProperties')}</p>
-      <button
+      <button type="button"
         className="inline-flex cursor-pointer items-center gap-1.5 rounded-md border border-border bg-background px-3 py-1.5 text-[13px] font-medium text-foreground transition-colors hover:bg-muted"
         onClick={onClick}
       >
@@ -114,7 +106,7 @@ export function InvalidFrontmatterNotice({ locale = 'en', onFix }: { locale?: Ap
     <div className="flex flex-col items-center gap-3 rounded-lg border border-dashed border-destructive/40 bg-destructive/5 px-4 py-6">
       <WarningCircle size={24} className="text-destructive" />
       <p className="m-0 text-center text-[13px] text-muted-foreground">{translate(locale, 'inspector.empty.invalidProperties')}</p>
-      <button
+      <button type="button"
         className="inline-flex cursor-pointer items-center gap-1.5 rounded-md border border-border bg-background px-3 py-1.5 text-[13px] font-medium text-foreground transition-colors hover:bg-muted"
         onClick={onFix}
       >

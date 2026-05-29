@@ -1,7 +1,9 @@
 import { test, expect } from '@playwright/test'
+import { installMockAiAgent } from './helpers'
 
 test.describe('AI chat empty body fix — no regression', () => {
   test.beforeEach(async ({ page }) => {
+    await installMockAiAgent(page)
     await page.route('**/api/vault/ping', route => route.fulfill({ status: 503 }))
     await page.goto('/', { waitUntil: 'domcontentloaded' })
     await expect(page.locator('[data-testid="note-list-container"]')).toBeVisible({ timeout: 5_000 })
@@ -18,7 +20,10 @@ test.describe('AI chat empty body fix — no regression', () => {
 
     // Open the AI panel from the editor toolbar
     await page.getByRole('button', { name: 'Open the AI panel' }).click()
+    await expect(page.getByTestId('ai-workspace')).toBeVisible({ timeout: 3000 })
     await expect(page.getByTestId('ai-panel')).toBeVisible({ timeout: 3000 })
+    await expect(page.getByTestId('ai-workspace-target-trigger')).toBeVisible()
+    await expect(page.getByTestId('ai-workspace-permission-trigger')).toBeVisible()
 
     // Send a message
     const input = page.getByTestId('agent-input')

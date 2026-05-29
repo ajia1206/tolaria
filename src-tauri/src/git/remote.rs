@@ -1,8 +1,12 @@
-use super::git_command;
 use serde::{Deserialize, Serialize};
 use std::path::Path;
 
+use super::command::{git_output, git_output_result, stderr_text, stdout_text};
 use super::conflict::get_conflict_files;
+use super::remote_config::has_configured_remote;
+
+const NO_REMOTE_STATUS: &str = "no_remote";
+const NO_REMOTE_MESSAGE: &str = "No remote configured";
 
 #[derive(Debug, Serialize, Deserialize, Clone, PartialEq)]
 pub struct GitPullResult {
@@ -17,13 +21,7 @@ pub struct GitPullResult {
 /// Check whether the vault repo has at least one remote configured.
 pub fn has_remote(vault_path: &str) -> Result<bool, String> {
     let vault = Path::new(vault_path);
-    let output = git_command()
-        .args(["remote"])
-        .current_dir(vault)
-        .output()
-        .map_err(|e| format!("Failed to run git remote: {}", e))?;
-
-    Ok(!String::from_utf8_lossy(&output.stdout).trim().is_empty())
+    has_configured_remote(vault)
 }
 
 /// Pull latest changes from remote. Uses --no-rebase to merge.
@@ -33,21 +31,18 @@ pub fn git_pull(vault_path: &str) -> Result<GitPullResult, String> {
 
     if !has_remote(vault_path)? {
         return Ok(GitPullResult {
-            status: "no_remote".to_string(),
-            message: "No remote configured".to_string(),
+            status: NO_REMOTE_STATUS.to_string(),
+            message: NO_REMOTE_MESSAGE.to_string(),
             updated_files: vec![],
             conflict_files: vec![],
         });
     }
 
-    let output = git_command()
-        .args(["pull", "--no-rebase"])
-        .current_dir(vault)
-        .output()
+    let output = git_output(vault, &["pull", "--no-rebase"])
         .map_err(|e| format!("Failed to run git pull: {}", e))?;
 
-    let stdout = String::from_utf8_lossy(&output.stdout).to_string();
-    let stderr = String::from_utf8_lossy(&output.stderr).to_string();
+    let stdout = stdout_text(&output);
+    let stderr = stderr_text(&output);
 
     if output.status.success() {
         if stdout.contains("Already up to date") || stdout.contains("Already up-to-date") {
@@ -134,18 +129,14 @@ pub fn git_remote_status(vault_path: &str) -> Result<GitRemoteStatus, String> {
     }
 
     // Fetch latest remote refs (silent, best-effort)
-    let _ = git_command()
-        .args(["fetch", "--quiet"])
-        .current_dir(vault)
-        .output();
+    let _ = git_output(vault, &["fetch", "--quiet"]);
 
     let branch = current_branch(vault)?;
 
-    let output = git_command()
-        .args(["rev-list", "--left-right", "--count", "HEAD...@{upstream}"])
-        .current_dir(vault)
-        .output()
-        .map_err(|e| format!("Failed to run git rev-list: {}", e))?;
+    let output = git_output_result(
+        vault,
+        &["rev-list", "--left-right", "--count", "HEAD...@{upstream}"],
+    )?;
 
     if !output.status.success() {
         // No upstream set — report 0/0
@@ -157,8 +148,8 @@ pub fn git_remote_status(vault_path: &str) -> Result<GitRemoteStatus, String> {
         });
     }
 
-    let stdout = String::from_utf8_lossy(&output.stdout);
-    let parts: Vec<&str> = stdout.trim().split('\t').collect();
+    let stdout = stdout_text(&output);
+    let parts: Vec<&str> = stdout.split('\t').collect();
     let ahead = parts.first().and_then(|s| s.parse().ok()).unwrap_or(0);
     let behind = parts.get(1).and_then(|s| s.parse().ok()).unwrap_or(0);
 
@@ -171,17 +162,14 @@ pub fn git_remote_status(vault_path: &str) -> Result<GitRemoteStatus, String> {
 }
 
 fn current_branch(vault: &Path) -> Result<String, String> {
-    let output = git_command()
-        .args(["branch", "--show-current"])
-        .current_dir(vault)
-        .output()
+    let output = git_output(vault, &["branch", "--show-current"])
         .map_err(|e| format!("Failed to get branch: {}", e))?;
-    Ok(String::from_utf8_lossy(&output.stdout).trim().to_string())
+    Ok(stdout_text(&output))
 }
 
 #[derive(Debug, Serialize, Deserialize, Clone, PartialEq)]
 pub struct GitPushResult {
-    pub status: String, // "ok" | "rejected" | "auth_error" | "network_error" | "error"
+    pub status: String, // "ok" | "rejected" | "auth_error" | "network_error" | "no_remote" | "error"
     pub message: String,
 }
 
@@ -208,6 +196,10 @@ pub fn classify_push_error(stderr: &str) -> GitPushResult {
             "network_error",
             "Push failed: network error. Check your connection and try again.",
         );
+    }
+
+    if is_no_remote_push_error(&lower) {
+        return push_error("no_remote", "No remote configured");
     }
 
     push_error(
@@ -259,6 +251,18 @@ fn is_network_push_error(lower: &str) -> bool {
     )
 }
 
+fn is_no_remote_push_error(lower: &str) -> bool {
+    contains_any(
+        lower,
+        &[
+            "no configured push destination",
+            "does not appear to be a git repository",
+            "no such remote",
+            "no upstream branch",
+        ],
+    )
+}
+
 fn push_error_detail(stderr: &str) -> String {
     let hint_line = stderr
         .lines()
@@ -283,14 +287,18 @@ fn push_error_detail(stderr: &str) -> String {
 pub fn git_push(vault_path: &str) -> Result<GitPushResult, String> {
     let vault = Path::new(vault_path);
 
-    let output = git_command()
-        .args(["push"])
-        .current_dir(vault)
-        .output()
-        .map_err(|e| format!("Failed to run git push: {}", e))?;
+    if !has_remote(vault_path)? {
+        return Ok(GitPushResult {
+            status: NO_REMOTE_STATUS.to_string(),
+            message: NO_REMOTE_MESSAGE.to_string(),
+        });
+    }
+
+    let output =
+        git_output(vault, &["push"]).map_err(|e| format!("Failed to run git push: {}", e))?;
 
     if !output.status.success() {
-        let stderr = String::from_utf8_lossy(&output.stderr);
+        let stderr = stderr_text(&output);
         return Ok(classify_push_error(&stderr));
     }
 
@@ -303,9 +311,15 @@ pub fn git_push(vault_path: &str) -> Result<GitPushResult, String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::git::git_command;
     use crate::git::git_commit;
     use crate::git::tests::{setup_git_repo, setup_remote_pair};
     use std::fs;
+
+    fn commit_default_note(vault_path: &Path) {
+        fs::write(vault_path.join("note.md"), "# Note\n").unwrap();
+        git_commit(vault_path.to_str().unwrap(), "initial").unwrap();
+    }
 
     #[test]
     fn test_has_remote_returns_false_for_local_repo() {
@@ -329,6 +343,27 @@ mod tests {
             .unwrap();
 
         assert!(has_remote(vp).unwrap());
+    }
+
+    #[test]
+    fn test_has_remote_ignores_name_only_remote_without_url() {
+        let dir = setup_git_repo();
+        let vault = dir.path();
+        let vp = vault.to_str().unwrap();
+
+        git_command()
+            .args(["config", "remote.origin.prune", "true"])
+            .current_dir(vault)
+            .output()
+            .unwrap();
+
+        let remote_names = git_command()
+            .args(["remote"])
+            .current_dir(vault)
+            .output()
+            .unwrap();
+        assert!(String::from_utf8_lossy(&remote_names.stdout).contains("origin"));
+        assert!(!has_remote(vp).unwrap());
     }
 
     #[test]
@@ -431,6 +466,14 @@ hint: have locally."#;
     }
 
     #[test]
+    fn test_classify_push_error_no_remote() {
+        let stderr = "fatal: No configured push destination.";
+        let result = classify_push_error(stderr);
+        assert_eq!(result.status, "no_remote");
+        assert!(result.message.contains("No remote"));
+    }
+
+    #[test]
     fn test_classify_push_error_unknown() {
         let stderr = "error: something unexpected happened\nhint: Try again later";
         let result = classify_push_error(stderr);
@@ -463,10 +506,21 @@ hint: have locally."#;
         let (_bare, clone_a, _clone_b) = setup_remote_pair();
         let vp_a = clone_a.path().to_str().unwrap();
 
-        fs::write(clone_a.path().join("note.md"), "# Note\n").unwrap();
-        git_commit(vp_a, "initial").unwrap();
+        commit_default_note(clone_a.path());
         let result = git_push(vp_a).unwrap();
         assert_eq!(result.status, "ok");
+    }
+
+    #[test]
+    fn test_git_push_no_remote_returns_no_remote() {
+        let dir = setup_git_repo();
+        let vault = dir.path();
+        let vp = vault.to_str().unwrap();
+
+        commit_default_note(vault);
+
+        let result = git_push(vp).unwrap();
+        assert_eq!(result.status, "no_remote");
     }
 
     #[test]

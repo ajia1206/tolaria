@@ -332,6 +332,53 @@ describe('useCommandRegistry', () => {
     expect(findCommand(result.current, 'archive-note')?.shortcut).toBeUndefined()
   })
 
+  it('exposes undo and redo commands only when action history has entries', () => {
+    const onUndo = vi.fn()
+    const onRedo = vi.fn()
+    const { result, rerender } = renderHook(
+      (props) => useCommandRegistry(props),
+      {
+        initialProps: makeConfig({
+          onUndo,
+          onRedo,
+          canUndo: true,
+          canRedo: false,
+          undoLabel: 'Archive Note',
+          redoLabel: null,
+        }),
+      },
+    )
+
+    expect(findCommand(result.current, 'undo-action')).toMatchObject({
+      enabled: true,
+      label: 'Undo Archive Note',
+      shortcut: formatShortcutDisplay({ display: '⌘Z' }),
+    })
+    expect(findCommand(result.current, 'redo-action')).toMatchObject({
+      enabled: false,
+      label: 'Redo',
+      shortcut: formatShortcutDisplay({ display: '⌘⇧Z' }),
+    })
+
+    findCommand(result.current, 'undo-action')?.execute()
+    expect(onUndo).toHaveBeenCalledOnce()
+
+    rerender(makeConfig({
+      onUndo,
+      onRedo,
+      canUndo: false,
+      canRedo: true,
+      undoLabel: null,
+      redoLabel: 'Archive Note',
+    }))
+
+    expect(findCommand(result.current, 'undo-action')?.enabled).toBe(false)
+    expect(findCommand(result.current, 'redo-action')).toMatchObject({
+      enabled: true,
+      label: 'Redo Archive Note',
+    })
+  })
+
   it('removes AI commands when AI features are disabled', () => {
     const config = makeConfig({
       aiFeaturesEnabled: false,
@@ -356,11 +403,13 @@ describe('useCommandRegistry', () => {
   it('exposes active file actions when a note is selected', () => {
     const onRevealActiveFile = vi.fn()
     const onCopyActiveFilePath = vi.fn()
+    const onCopyActiveDeepLink = vi.fn()
     const config = makeConfig({
       activeTabPath: '/vault/current.md',
       entries: [{ path: '/vault/current.md', title: 'Current', fileKind: 'markdown' }],
       onRevealActiveFile,
       onCopyActiveFilePath,
+      onCopyActiveDeepLink,
     })
     const { result } = renderHook(() => useCommandRegistry(config))
 
@@ -374,12 +423,19 @@ describe('useCommandRegistry', () => {
       group: 'Note',
       label: 'Copy File Path',
     })
+    expect(findCommand(result.current, 'copy-active-deep-link')).toMatchObject({
+      enabled: true,
+      group: 'Note',
+      label: 'Copy deep link to current item',
+    })
 
     findCommand(result.current, 'reveal-active-file')!.execute()
     findCommand(result.current, 'copy-active-file-path')!.execute()
+    findCommand(result.current, 'copy-active-deep-link')!.execute()
 
     expect(onRevealActiveFile).toHaveBeenCalledWith('/vault/current.md')
     expect(onCopyActiveFilePath).toHaveBeenCalledWith('/vault/current.md')
+    expect(onCopyActiveDeepLink).toHaveBeenCalledWith('/vault/current.md')
   })
 
   it('only enables external open for non-markdown active files', () => {
@@ -536,6 +592,7 @@ describe('useCommandRegistry', () => {
   })
 
   it('includes a New AI chat command that opens and resets the panel session', () => {
+    vi.useFakeTimers()
     const config = makeConfig()
     const dispatchSpy = vi.spyOn(window, 'dispatchEvent')
     const { result } = renderHook(() => useCommandRegistry(config))
@@ -548,9 +605,11 @@ describe('useCommandRegistry', () => {
 
     cmd!.execute()
 
-    expect(dispatchSpy).toHaveBeenCalledWith(expect.objectContaining({ type: NEW_AI_CHAT_EVENT }))
     expect(dispatchSpy).toHaveBeenCalledWith(expect.objectContaining({ type: OPEN_AI_CHAT_EVENT }))
+    vi.runOnlyPendingTimers()
+    expect(dispatchSpy).toHaveBeenCalledWith(expect.objectContaining({ type: NEW_AI_CHAT_EVENT }))
     dispatchSpy.mockRestore()
+    vi.useRealTimers()
   })
 
   it('omits Inbox navigation when the explicit workflow is disabled', () => {
@@ -650,6 +709,36 @@ describe('useCommandRegistry', () => {
       id: 'create-note',
       shortcut: formatShortcutDisplay({ display: '⌘N' }),
     })
+  })
+
+  it('exposes a current-folder create command only when a folder is selected', () => {
+    const onCreateNote = vi.fn()
+    const { result } = renderHook(() => useCommandRegistry(makeConfig({
+      onCreateNote,
+      selection: { kind: 'folder', path: 'Projects/2026 Planning', rootPath: '/vault' },
+    })))
+
+    const command = findCommand(result.current, 'create-note-current-folder')
+    expect(command).toMatchObject({
+      label: 'Create New Note in Current Folder',
+      group: 'Note',
+      enabled: true,
+    })
+
+    command!.execute()
+    expect(onCreateNote).toHaveBeenCalledWith(undefined, {
+      creationPath: 'folder_command_palette',
+      folderPath: 'Projects/2026 Planning',
+      vaultPath: '/vault',
+    })
+  })
+
+  it('disables the current-folder create command outside folder selections', () => {
+    const { result } = renderHook(() => useCommandRegistry(makeConfig({
+      selection: { kind: 'filter', filter: 'all' },
+    })))
+
+    expect(findCommand(result.current, 'create-note-current-folder')?.enabled).toBe(false)
   })
 
   it('exposes paste without formatting in the command palette', () => {

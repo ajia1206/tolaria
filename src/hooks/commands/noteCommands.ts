@@ -1,5 +1,6 @@
 import { APP_COMMAND_IDS, getAppCommandShortcutDisplay } from '../appCommandCatalog'
 import { buildEditorFindCommands } from './editorFindCommands'
+import type { ImmediateCreateOptions } from '../useNoteCreation'
 import type { CommandAction } from './types'
 
 interface NoteCommandsConfig {
@@ -8,9 +9,16 @@ interface NoteCommandsConfig {
   activeFileKind?: 'markdown' | 'text' | 'binary'
   isArchived: boolean
   activeNoteHasIcon?: boolean
-  onCreateNote: () => void
+  onCreateNote: (type?: string, options?: ImmediateCreateOptions) => void
   onCreateType?: () => void
+  currentFolderCreateOptions?: ImmediateCreateOptions
   onSave: () => void
+  onUndo?: () => void
+  onRedo?: () => void
+  canUndo?: boolean
+  canRedo?: boolean
+  undoLabel?: string | null
+  redoLabel?: string | null
   onFindInNote?: () => void
   onReplaceInNote?: () => void
   onPastePlainText: () => void
@@ -25,6 +33,7 @@ interface NoteCommandsConfig {
   onOpenInNewWindow?: () => void
   onRevealActiveFile?: (path: string) => void
   onCopyActiveFilePath?: (path: string) => void
+  onCopyActiveDeepLink?: (path: string) => void
   onOpenActiveFileExternal?: (path: string) => void
   onToggleFavorite?: (path: string) => void
   isFavorite?: boolean
@@ -63,6 +72,16 @@ function createNoteCommand(config: NoteCommandConfig): CommandAction {
   }
 }
 
+function buildCurrentFolderNoteCommand(config: NoteCommandsConfig): CommandAction {
+  return createNoteCommand({
+    id: 'create-note-current-folder',
+    label: 'Create New Note in Current Folder',
+    keywords: ['new', 'create', 'add', 'folder', 'current'],
+    enabled: config.currentFolderCreateOptions !== undefined,
+    execute: () => config.onCreateNote(undefined, config.currentFolderCreateOptions),
+  })
+}
+
 function buildCoreNoteCommands(config: NoteCommandsConfig): CommandAction[] {
   return [
     createNoteCommand({
@@ -73,6 +92,7 @@ function buildCoreNoteCommands(config: NoteCommandsConfig): CommandAction[] {
       enabled: true,
       execute: config.onCreateNote,
     }),
+    buildCurrentFolderNoteCommand(config),
     createNoteCommand({
       id: 'create-type',
       label: 'New Type',
@@ -88,6 +108,7 @@ function buildCoreNoteCommands(config: NoteCommandsConfig): CommandAction[] {
       enabled: config.hasActiveNote,
       execute: config.onSave,
     }),
+    ...buildHistoryNoteCommands(config),
     createNoteCommand({
       id: 'paste-plain-text',
       label: 'Paste without formatting',
@@ -97,6 +118,31 @@ function buildCoreNoteCommands(config: NoteCommandsConfig): CommandAction[] {
       execute: config.onPastePlainText,
     }),
     ...buildEditorFindCommands(config),
+  ]
+}
+
+function historyCommandLabel(action: string, label?: string | null): string {
+  return [action, label].filter(Boolean).join(' ')
+}
+
+function buildHistoryNoteCommands(config: NoteCommandsConfig): CommandAction[] {
+  return [
+    createNoteCommand({
+      id: 'undo-action',
+      label: historyCommandLabel('Undo', config.undoLabel),
+      shortcut: getAppCommandShortcutDisplay(APP_COMMAND_IDS.editUndo),
+      keywords: ['undo', 'revert', 'history'],
+      enabled: Boolean(config.canUndo && config.onUndo),
+      execute: config.onUndo,
+    }),
+    createNoteCommand({
+      id: 'redo-action',
+      label: historyCommandLabel('Redo', config.redoLabel),
+      shortcut: getAppCommandShortcutDisplay(APP_COMMAND_IDS.editRedo),
+      keywords: ['redo', 'repeat', 'history'],
+      enabled: Boolean(config.canRedo && config.onRedo),
+      execute: config.onRedo,
+    }),
   ]
 }
 
@@ -199,33 +245,54 @@ function buildRetargetingCommands(config: NoteCommandsConfig): CommandAction[] {
   ]
 }
 
+interface ActivePathCommandConfig {
+  enabled: boolean
+  id: string
+  keywords: string[]
+  label: string
+  run: (path: string) => void
+}
+
+function buildActivePathCommand(config: NoteCommandsConfig, command: ActivePathCommandConfig): CommandAction {
+  return createNoteCommand({
+    id: command.id,
+    label: command.label,
+    keywords: command.keywords,
+    enabled: config.hasActiveNote && command.enabled,
+    path: config.activeTabPath,
+    run: command.run,
+  })
+}
+
 function buildFileActionCommands(config: NoteCommandsConfig): CommandAction[] {
   const activeFileKind = config.activeFileKind ?? 'markdown'
-  const hasNonMarkdownActiveFile = config.hasActiveNote && activeFileKind !== 'markdown'
-
   return [
-    createNoteCommand({
+    buildActivePathCommand(config, {
       id: 'reveal-active-file',
       label: 'Reveal in Finder',
       keywords: ['file', 'folder', 'finder', 'reveal', 'show', 'filesystem'],
-      enabled: config.hasActiveNote && !!config.onRevealActiveFile,
-      path: config.activeTabPath,
+      enabled: !!config.onRevealActiveFile,
       run: (path) => config.onRevealActiveFile?.(path),
     }),
-    createNoteCommand({
+    buildActivePathCommand(config, {
       id: 'copy-active-file-path',
       label: 'Copy File Path',
       keywords: ['file', 'path', 'copy', 'clipboard', 'filesystem'],
-      enabled: config.hasActiveNote && !!config.onCopyActiveFilePath,
-      path: config.activeTabPath,
+      enabled: !!config.onCopyActiveFilePath,
       run: (path) => config.onCopyActiveFilePath?.(path),
     }),
-    createNoteCommand({
+    buildActivePathCommand(config, {
+      id: 'copy-active-deep-link',
+      label: 'Copy deep link to current item',
+      keywords: ['deeplink', 'deep link', 'url', 'link', 'copy', 'clipboard'],
+      enabled: !!config.onCopyActiveDeepLink,
+      run: (path) => config.onCopyActiveDeepLink?.(path),
+    }),
+    buildActivePathCommand(config, {
       id: 'open-active-file-external',
       label: 'Open in Default App',
       keywords: ['file', 'open', 'external', 'default', 'attachment'],
-      enabled: hasNonMarkdownActiveFile && !!config.onOpenActiveFileExternal,
-      path: config.activeTabPath,
+      enabled: activeFileKind !== 'markdown' && !!config.onOpenActiveFileExternal,
       run: (path) => config.onOpenActiveFileExternal?.(path),
     }),
   ]

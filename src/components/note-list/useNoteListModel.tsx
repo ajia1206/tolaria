@@ -9,14 +9,16 @@ import type {
   ViewFile,
 } from '../../types'
 import type { AppLocale } from '../../lib/i18n'
-import type { NoteListFilter } from '../../utils/noteListHelpers'
+import type { NoteListFilter, RelationshipGroup } from '../../utils/noteListHelpers'
 import { countByFilter, countAllByFilter, countAllNotesByFilter } from '../../utils/noteListHelpers'
 import type { AllNotesFileVisibility } from '../../utils/allNotesFileVisibility'
 import type { GitRepositoryOption } from '../../utils/gitRepositories'
+import type { ImmediateCreateOptions } from '../../hooks/useNoteCreation'
 import { NoteItem } from '../NoteItem'
 import { prefetchNoteContent } from '../../hooks/useTabManagement'
 import type { MultiSelectState } from '../../hooks/useMultiSelect'
 import { isDeletedNoteEntry, resolveHeaderTitle, type DeletedNoteEntry } from './noteListUtils'
+import { useNoteListFullTextSearch } from './noteListFullTextSearch'
 import { filterEntriesByNoteListQuery, filterGroupsByNoteListQuery } from './noteListSearch'
 import { useNoteListSearchState } from './useNoteListSearchState'
 import {
@@ -170,6 +172,37 @@ interface UseNoteListContentParams {
   allNotesFileVisibility?: AllNotesFileVisibility
 }
 
+function useFilteredNoteListSearch({
+  entries,
+  sortedEntries,
+  sortedGroups,
+  query,
+  typeEntryMap,
+  displayPropsOverride,
+  dateDisplayFormat,
+}: {
+  entries: VaultEntry[]
+  sortedEntries: VaultEntry[]
+  sortedGroups: RelationshipGroup[]
+  query: string
+  typeEntryMap: Record<string, VaultEntry>
+  displayPropsOverride?: string[] | null
+  dateDisplayFormat: ReturnType<typeof useDateDisplayFormat>
+}) {
+  const fullTextSearch = useNoteListFullTextSearch(entries, query)
+  const searchContext = useMemo(() => ({
+    allEntries: entries,
+    typeEntryMap,
+    displayPropsOverride,
+    dateDisplayFormat,
+    fullTextResultPaths: fullTextSearch.resultPaths,
+  }), [dateDisplayFormat, displayPropsOverride, entries, fullTextSearch.resultPaths, typeEntryMap])
+  const searched = useMemo(() => filterEntriesByNoteListQuery(sortedEntries, query, searchContext), [query, searchContext, sortedEntries])
+  const searchedGroups = useMemo(() => filterGroupsByNoteListQuery(sortedGroups, query, searchContext), [query, searchContext, sortedGroups])
+
+  return { isFullTextSearching: fullTextSearch.loading, searched, searchedGroups }
+}
+
 function useNoteListContent({
   entries,
   selection,
@@ -210,7 +243,7 @@ function useNoteListContent({
   })
   const {
     closeSearch,
-    isSearching,
+    isSearching: isDebouncingSearch,
     query,
     search,
     searchInputRef,
@@ -253,14 +286,15 @@ function useNoteListContent({
     views,
     allNotesFileVisibility,
   })
-  const searchContext = useMemo(() => ({
-    allEntries: entries,
+  const { isFullTextSearching, searched, searchedGroups } = useFilteredNoteListSearch({
+    entries,
+    sortedEntries,
+    sortedGroups,
+    query,
     typeEntryMap,
     displayPropsOverride,
     dateDisplayFormat,
-  }), [dateDisplayFormat, displayPropsOverride, entries, typeEntryMap])
-  const searched = useMemo(() => filterEntriesByNoteListQuery(sortedEntries, query, searchContext), [query, searchContext, sortedEntries])
-  const searchedGroups = useMemo(() => filterGroupsByNoteListQuery(sortedGroups, query, searchContext), [query, searchContext, sortedGroups])
+  })
   useVisibleNotesSync({ visibleNotesRef, isEntityView, entityEntry, searched, searchedGroups })
   useLikelyNextPreload(searched, selectedNotePath)
 
@@ -270,7 +304,7 @@ function useNoteListContent({
     entityEntry,
     handleSortChange,
     isArchivedView,
-    isSearching,
+    isSearching: isDebouncingSearch || isFullTextSearching,
     isEntityView,
     listDirection,
     listSort,
@@ -312,7 +346,7 @@ interface UseNoteListInteractionStateParams {
   onCopyFilePath?: (path: string) => void
   onAutoTriggerDiff?: () => void
   onDiscardFile?: (relativePath: string) => Promise<void>
-  onCreateNote: (type?: string) => void
+  onCreateNote: (type?: string, options?: ImmediateCreateOptions) => void
   onBulkArchive?: (paths: string[]) => void
   onBulkDeletePermanently?: (paths: string[]) => void
   locale: AppLocale

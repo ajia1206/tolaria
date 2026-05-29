@@ -1,4 +1,4 @@
-import { useRef, useEffect, useCallback, memo, useState } from 'react'
+import { useRef, useEffect, useCallback, memo, useState, type ReactNode } from 'react'
 import { useEditorTabSwap } from '../hooks/useEditorTabSwap'
 import { useCreateBlockNote } from '@blocknote/react'
 import '@blocknote/mantine/style.css'
@@ -82,6 +82,7 @@ interface EditorProps {
   onInitializeProperties?: (path: string) => void
   showAIChat?: boolean
   onToggleAIChat?: () => void
+  aiWorkspaceSurface?: ReactNode
   vaultPath?: string
   vaultPaths?: string[]
   noteList?: NoteListItem[]
@@ -91,6 +92,7 @@ interface EditorProps {
   onEnterNeighborhood?: (entry: VaultEntry) => void
   onRevealFile?: (path: string) => void
   onCopyFilePath?: (path: string) => void
+  onCopyDeepLink?: (entry: VaultEntry) => void
   onOpenExternalFile?: (path: string) => void
   onDeleteNote?: (path: string) => void
   onArchiveNote?: (path: string) => void
@@ -344,6 +346,7 @@ function EditorLayout({
   showDiffToggle,
   showAIChat,
   onToggleAIChat,
+  aiWorkspaceSurface,
   showTableOfContents,
   onToggleTableOfContents,
   inspectorCollapsed,
@@ -355,6 +358,7 @@ function EditorLayout({
   onEnterNeighborhood,
   onRevealFile,
   onCopyFilePath,
+  onCopyDeepLink,
   onOpenExternalFile,
   onDeleteNote,
   onArchiveNote,
@@ -415,6 +419,7 @@ function EditorLayout({
   showDiffToggle: boolean
   showAIChat?: boolean
   onToggleAIChat?: () => void
+  aiWorkspaceSurface?: ReactNode
   showTableOfContents?: boolean
   onToggleTableOfContents?: () => void
   inspectorCollapsed: boolean
@@ -426,6 +431,7 @@ function EditorLayout({
   onEnterNeighborhood?: (entry: VaultEntry) => void
   onRevealFile?: (path: string) => void
   onCopyFilePath?: (path: string) => void
+  onCopyDeepLink?: (entry: VaultEntry) => void
   onOpenExternalFile?: (path: string) => void
   onDeleteNote?: (path: string) => void
   onArchiveNote?: (path: string) => void
@@ -472,14 +478,16 @@ function EditorLayout({
 
   return (
     <div className="editor flex flex-col min-h-0 overflow-hidden bg-background text-foreground">
-      <div className="flex flex-1 min-h-0">
+      <div className="relative flex flex-1 min-h-0">
         {showEmptyState
           ? <EditorEmptyState locale={locale} />
           : activeBinaryTab
             ? (
                 <FilePreview
                   entry={activeBinaryTab.entry}
+                  locale={locale}
                   onCopyFilePath={onCopyFilePath}
+                  onCopyDeepLink={onCopyDeepLink}
                   onOpenExternalFile={onOpenExternalFile}
                   onRevealFile={onRevealFile}
                 />
@@ -514,6 +522,7 @@ function EditorLayout({
               onEnterNeighborhood={onEnterNeighborhood}
               onRevealFile={onRevealFile}
               onCopyFilePath={onCopyFilePath}
+              onCopyDeepLink={onCopyDeepLink}
               onDeleteNote={onDeleteNote}
               onArchiveNote={onArchiveNote}
               onUnarchiveNote={onUnarchiveNote}
@@ -530,9 +539,9 @@ function EditorLayout({
               locale={locale}
             />
         }
-        {(showAIChat || showTableOfContents || !inspectorCollapsed) && <ResizeHandle onResize={onInspectorResize} />}
+        {(showTableOfContents || !inspectorCollapsed) && <ResizeHandle onResize={onInspectorResize} />}
         <EditorRightPanel
-          showAIChat={showAIChat}
+          showAIChat={false}
           showTableOfContents={showTableOfContents}
           inspectorCollapsed={inspectorCollapsed}
           inspectorWidth={inspectorWidth}
@@ -570,6 +579,7 @@ function EditorLayout({
           workspaces={workspaces}
           locale={locale}
         />
+        {showAIChat && aiWorkspaceSurface}
       </div>
       <EditorMemoryProbe entries={entries} vaultPath={vaultPath} locale={locale} />
     </div>

@@ -1,7 +1,6 @@
-import { useRef } from 'react'
+import { useCallback, useRef, type CSSProperties, type ReactNode, type RefObject } from 'react'
 import {
   AiPanelComposer,
-  AiPanelContextBar,
   AiPanelHeader,
   AiPanelMessageHistory,
 } from './AiPanelChrome'
@@ -56,10 +55,87 @@ interface AiPanelViewProps {
   locale?: AppLocale
   activeEntry?: VaultEntry | null
   entries?: VaultEntry[]
+  interactive?: boolean
+  showHeader?: boolean
+  showLeftBorder?: boolean
+  surface?: 'default' | 'sidebar'
+  composerControls?: ReactNode
+  onForkMessage?: (messageId: string) => void
+  onSendPrompt?: (text: string) => void
+  onMessageHistoryScrollStateChange?: (scrolled: boolean) => void
 }
 
 function readinessFromReadyFlag(ready: boolean | undefined): AiAgentReadiness {
   return (ready ?? true) ? 'ready' : 'missing'
+}
+
+interface AiPanelViewModel {
+  agentLabel: string
+  defaultAiAgent: AiAgentId
+  defaultAiAgentReadiness: AiAgentReadiness
+  targetKind: AiTarget['kind']
+}
+
+function resolveAiPanelViewModel({
+  defaultAiAgent,
+  defaultAiAgentReadiness,
+  defaultAiAgentReady,
+  defaultAiTarget,
+}: {
+  defaultAiAgent?: AiAgentId
+  defaultAiAgentReadiness?: AiAgentReadiness
+  defaultAiAgentReady?: boolean
+  defaultAiTarget?: AiTarget
+}): AiPanelViewModel {
+  const resolvedAgent = defaultAiAgent ?? DEFAULT_AI_AGENT
+  const resolvedReadiness = defaultAiAgentReadiness ?? readinessFromReadyFlag(defaultAiAgentReady)
+
+  return {
+    agentLabel: defaultAiTarget?.label ?? getAiAgentDefinition(resolvedAgent).label,
+    defaultAiAgent: resolvedAgent,
+    defaultAiAgentReadiness: resolvedReadiness,
+    targetKind: defaultAiTarget?.kind ?? 'agent',
+  }
+}
+
+function aiPanelFrameStyle(isActive: boolean, showLeftBorder: boolean): CSSProperties {
+  return {
+    outline: 'none',
+    borderLeft: showLeftBorder
+      ? isActive
+        ? '2px solid var(--accent-blue)'
+        : '1px solid var(--border)'
+      : undefined,
+    animation: showLeftBorder && isActive ? 'ai-border-pulse 2s ease-in-out infinite' : undefined,
+    transition: showLeftBorder ? 'border-color 0.3s ease' : undefined,
+  }
+}
+
+function AiPanelFrame({
+  children,
+  isActive,
+  panelRef,
+  showLeftBorder,
+  surface,
+}: {
+  children: ReactNode
+  isActive: boolean
+  panelRef: RefObject<HTMLElement | null>
+  showLeftBorder: boolean
+  surface: 'default' | 'sidebar'
+}) {
+  return (
+    <aside
+      ref={panelRef}
+      tabIndex={-1}
+      className={`flex flex-1 flex-col overflow-hidden ${surface === 'sidebar' ? 'bg-sidebar text-sidebar-foreground' : 'bg-background text-foreground'}`}
+      style={aiPanelFrameStyle(isActive, showLeftBorder)}
+      data-testid="ai-panel"
+      data-ai-active={isActive || undefined}
+    >
+      {children}
+    </aside>
+  )
 }
 
 export function AiPanelView({
@@ -72,22 +148,28 @@ export function AiPanelView({
   defaultAiAgentReadiness: providedDefaultAiAgentReadiness,
   defaultAiAgentReady: providedDefaultAiAgentReady,
   locale = 'en',
-  activeEntry,
   entries,
+  interactive = true,
+  showHeader = true,
+  showLeftBorder = true,
+  surface = 'default',
+  composerControls,
+  onForkMessage,
+  onSendPrompt,
+  onMessageHistoryScrollStateChange,
 }: AiPanelViewProps) {
-  const defaultAiAgent = providedDefaultAiAgent ?? DEFAULT_AI_AGENT
-  const defaultAiAgentReadiness = providedDefaultAiAgentReadiness
-    ?? readinessFromReadyFlag(providedDefaultAiAgentReady)
+  const view = resolveAiPanelViewModel({
+    defaultAiAgent: providedDefaultAiAgent,
+    defaultAiAgentReadiness: providedDefaultAiAgentReadiness,
+    defaultAiAgentReady: providedDefaultAiAgentReady,
+    defaultAiTarget,
+  })
   const inputRef = useRef<HTMLDivElement>(null)
   const panelRef = useRef<HTMLElement>(null)
-  const activeTarget = defaultAiTarget
-  const agentLabel = activeTarget?.label ?? getAiAgentDefinition(defaultAiAgent).label
-  const targetKind = activeTarget?.kind ?? 'agent'
   const {
     agent,
     input,
     setInput,
-    linkedEntries,
     hasContext,
     isActive,
     permissionMode,
@@ -97,68 +179,63 @@ export function AiPanelView({
     handleNewChat,
   } = controller
 
-  useAiPanelPromptQueue({ agent, input, isActive, setInput })
+  useAiPanelPromptQueue({ agent, input, isActive, setInput, enabled: interactive })
   useAiPanelFocus({
     inputRef,
     panelRef,
     hasMessages: agent.messages.length > 0,
     isActive,
     onClose,
+    enabled: interactive,
   })
+  const handleComposerSend = useCallback((text: string, references: Parameters<typeof handleSend>[1]) => {
+    if (!text.trim() || isActive) return
+    onSendPrompt?.(text)
+    handleSend(text, references)
+  }, [handleSend, isActive, onSendPrompt])
 
   return (
-    <aside
-      ref={panelRef}
-      tabIndex={-1}
-      className="flex flex-1 flex-col overflow-hidden bg-background text-foreground"
-      style={{
-        outline: 'none',
-        borderLeft: isActive
-          ? '2px solid var(--accent-blue)'
-          : '1px solid var(--border)',
-        animation: isActive ? 'ai-border-pulse 2s ease-in-out infinite' : undefined,
-        transition: 'border-color 0.3s ease',
-      }}
-      data-testid="ai-panel"
-      data-ai-active={isActive || undefined}
-    >
-      <AiPanelHeader
-        agentLabel={agentLabel}
-        agentReadiness={defaultAiAgentReadiness}
-        targetKind={targetKind}
-        locale={locale}
-        permissionMode={permissionMode}
-        permissionModeDisabled={isActive}
-        onPermissionModeChange={handlePermissionModeChange}
-        onClose={onClose}
-        onNewChat={handleNewChat}
-      />
-      {activeEntry && (
-        <AiPanelContextBar activeEntry={activeEntry} linkedCount={linkedEntries.length} locale={locale} />
+    <AiPanelFrame panelRef={panelRef} isActive={isActive} showLeftBorder={showLeftBorder} surface={surface}>
+      {showHeader && (
+        <AiPanelHeader
+          agentLabel={view.agentLabel}
+          agentReadiness={view.defaultAiAgentReadiness}
+          targetKind={view.targetKind}
+          locale={locale}
+          permissionMode={permissionMode}
+          permissionModeDisabled={isActive}
+          onPermissionModeChange={handlePermissionModeChange}
+          onClose={onClose}
+          onNewChat={handleNewChat}
+        />
       )}
       <AiPanelMessageHistory
-        agentLabel={agentLabel}
-        agentReadiness={defaultAiAgentReadiness}
+        agentLabel={view.agentLabel}
+        agentReadiness={view.defaultAiAgentReadiness}
         locale={locale}
         messages={agent.messages}
         isActive={isActive}
+        onForkMessage={onForkMessage}
         onOpenNote={onOpenNote}
         onNavigateWikilink={handleNavigateWikilink}
+        onRegenerateMessage={agent.regenerateMessage}
+        onScrollStateChange={onMessageHistoryScrollStateChange}
         hasContext={hasContext}
       />
       <AiPanelComposer
         entries={entries ?? []}
-        agentLabel={agentLabel}
-        agentReadiness={defaultAiAgentReadiness}
+        agentLabel={view.agentLabel}
+        agentReadiness={view.defaultAiAgentReadiness}
         locale={locale}
         input={input}
         inputRef={inputRef}
         isActive={isActive}
+        controls={composerControls}
         onChange={setInput}
-        onSend={handleSend}
+        onSend={handleComposerSend}
         onUnsupportedAiPaste={onUnsupportedAiPaste}
       />
-    </aside>
+    </AiPanelFrame>
   )
 }
 

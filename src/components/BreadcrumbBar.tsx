@@ -1,4 +1,4 @@
-import { memo, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type CSSProperties, type KeyboardEvent, type ReactNode } from 'react'
+import { memo, useCallback, useEffect, useImperativeHandle, useLayoutEffect, useMemo, useRef, useState, type CSSProperties, type KeyboardEvent, type ReactNode } from 'react'
 import type { NoteWidthMode, VaultEntry } from '../types'
 import { cn } from '@/lib/utils'
 import { translate, type AppLocale } from '../lib/i18n'
@@ -18,14 +18,14 @@ import {
 import {
   GitBranch,
   Code,
-  Sparkle,
   ListBullets,
-  SidebarSimple,
+  GearSix,
   Trash,
   Archive,
   ArrowUUpLeft,
   ClipboardText,
   FolderOpen,
+  Link,
   MapTrifold,
   Star,
   CheckCircle,
@@ -58,6 +58,7 @@ interface BreadcrumbBarProps {
   onToggleOrganized?: () => void
   onRevealFile?: (path: string) => void
   onCopyFilePath?: (path: string) => void
+  onCopyDeepLink?: (entry: VaultEntry) => void
   onDelete?: () => void
   onArchive?: () => void
   onUnarchive?: () => void
@@ -332,21 +333,6 @@ function NeighborhoodAction({
   )
 }
 
-function AIChatAction({ showAIChat, locale = 'en', onToggleAIChat }: Pick<BreadcrumbBarProps, 'showAIChat' | 'locale' | 'onToggleAIChat'>) {
-  return (
-    <ToggleIconAction
-      active={!!showAIChat}
-      activeClassName="text-primary"
-      activeLabel={translate(locale, 'editor.toolbar.closeAi')}
-      inactiveLabel={translate(locale, 'editor.toolbar.openAi')}
-      onClick={onToggleAIChat}
-      shortcut={formatShortcutDisplay({ display: '⌘⇧L' })}
-    >
-      <Sparkle size={16} weight={showAIChat ? 'fill' : 'regular'} className={BREADCRUMB_ICON_CLASS} />
-    </ToggleIconAction>
-  )
-}
-
 function TableOfContentsAction({
   showTableOfContents,
   locale = 'en',
@@ -414,9 +400,10 @@ function InspectorAction({
       }}
       onClick={onToggleInspector}
       className="hover:text-foreground"
+      testId="breadcrumb-properties-button"
       tooltipAlign="end"
     >
-      <SidebarSimple size={16} weight="regular" className={BREADCRUMB_ICON_CLASS} style={{ transform: 'scaleX(-1)' }} />
+      <GearSix size={16} weight="regular" className={BREADCRUMB_ICON_CLASS} />
     </IconActionButton>
   )
 }
@@ -451,6 +438,10 @@ function archiveAction(
 
 function pathAction(action: ((path: string) => void) | undefined, path: string): (() => void) | undefined {
   return action ? () => action(path) : undefined
+}
+
+function entryAction(action: ((entry: VaultEntry) => void) | undefined, entry: VaultEntry): (() => void) | undefined {
+  return action ? () => action(entry) : undefined
 }
 
 function ArchiveMenuIcon({ archived }: { archived: boolean }) {
@@ -817,8 +808,6 @@ function BreadcrumbActions({
   forceRawMode,
   noteWidth,
   onToggleNoteWidth,
-  showAIChat,
-  onToggleAIChat,
   showTableOfContents,
   onToggleTableOfContents,
   inspectorCollapsed,
@@ -827,6 +816,7 @@ function BreadcrumbActions({
   onToggleOrganized,
   onRevealFile,
   onCopyFilePath,
+  onCopyDeepLink,
   onDelete,
   onArchive,
   onUnarchive,
@@ -854,9 +844,6 @@ function BreadcrumbActions({
       <OverflowToolbarAction>
         <NoteWidthAction noteWidth={noteWidth} locale={locale} onToggleNoteWidth={onToggleNoteWidth} />
       </OverflowToolbarAction>
-      {onToggleAIChat ? (
-        <AIChatAction showAIChat={showAIChat} locale={locale} onToggleAIChat={onToggleAIChat} />
-      ) : null}
       <OverflowToolbarAction>
         <TableOfContentsAction
           showTableOfContents={showTableOfContents}
@@ -877,6 +864,7 @@ function BreadcrumbActions({
         onToggleTableOfContents={onToggleTableOfContents}
         onRevealFile={onRevealFile}
         onCopyFilePath={onCopyFilePath}
+        onCopyDeepLink={onCopyDeepLink}
         onArchive={onArchive}
         onUnarchive={onUnarchive}
         onDelete={onDelete}
@@ -899,6 +887,7 @@ function BreadcrumbOverflowMenu({
   onToggleTableOfContents,
   onRevealFile,
   onCopyFilePath,
+  onCopyDeepLink,
   onArchive,
   onUnarchive,
   onDelete,
@@ -916,6 +905,7 @@ function BreadcrumbOverflowMenu({
   | 'onToggleTableOfContents'
   | 'onRevealFile'
   | 'onCopyFilePath'
+  | 'onCopyDeepLink'
   | 'onArchive'
   | 'onUnarchive'
   | 'onDelete'
@@ -927,6 +917,7 @@ function BreadcrumbOverflowMenu({
   const runDiffAction = availableDiffAction(showDiffToggle, onToggleDiff)
   const runRevealAction = pathAction(onRevealFile, entry.path)
   const runCopyPathAction = pathAction(onCopyFilePath, entry.path)
+  const runCopyDeepLinkAction = entryAction(onCopyDeepLink, entry)
   const runArchiveAction = archiveAction(entry.archived, onArchive, onUnarchive)
   const runNeighborhoodAction = neighborhoodAction(entry, onEnterNeighborhood)
   const diffLabel = translate(locale, 'editor.toolbar.gitDiff')
@@ -980,6 +971,10 @@ function BreadcrumbOverflowMenu({
             </DropdownMenuItem>
           </>
         )}
+        <DropdownMenuItem disabled={!runCopyDeepLinkAction} onSelect={runCopyDeepLinkAction}>
+          <Link size={16} />
+          {translate(locale, 'editor.toolbar.copyNoteDeepLink')}
+        </DropdownMenuItem>
         <DropdownMenuItem disabled={!runArchiveAction} onSelect={runArchiveAction}>
           <ArchiveMenuIcon archived={entry.archived} />
           {archiveLabel}
@@ -1044,18 +1039,32 @@ export const BreadcrumbBar = memo(function BreadcrumbBar({
   onRenameFilename,
   ...actionProps
 }: BreadcrumbBarProps) {
-  const { onMouseDown } = useDragRegion()
+  type DragRegionResult = ReturnType<typeof useDragRegion<HTMLDivElement>> & {
+    dragRegionRef?: React.RefObject<HTMLDivElement | null>
+  }
+  const { dragRegionRef, onMouseDown } = useDragRegion<HTMLDivElement>() as DragRegionResult
+  const fallbackDragRegionRef = useRef<HTMLDivElement>(null)
+  const breadcrumbDragRegionRef = dragRegionRef ?? fallbackDragRegionRef
   const actionsRef = useRef<HTMLDivElement | null>(null)
   const titleRef = useRef<HTMLDivElement | null>(null)
   const overflowCollapsed = useBreadcrumbOverflow(titleRef, actionsRef)
+  useImperativeHandle(barRef, () => breadcrumbDragRegionRef.current as HTMLDivElement, [breadcrumbDragRegionRef])
+
+  useEffect(() => {
+    if (dragRegionRef) return
+    const bar = fallbackDragRegionRef.current
+    if (!bar) return
+
+    bar.addEventListener('mousedown', onMouseDown)
+    return () => bar.removeEventListener('mousedown', onMouseDown)
+  }, [dragRegionRef, onMouseDown])
 
   return (
     <TooltipProvider>
       <div
-        ref={barRef}
+        ref={breadcrumbDragRegionRef}
         data-tauri-drag-region
         data-title-hidden=""
-        onMouseDown={onMouseDown}
         className="breadcrumb-bar flex shrink-0 items-center border-b border-transparent"
         style={{
           height: 52,

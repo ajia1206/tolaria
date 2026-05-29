@@ -1,5 +1,5 @@
-import { memo, useEffect, useRef } from 'react'
-import { Robot, X, PaperPlaneRight, Plus, Link } from '@phosphor-icons/react'
+import { memo, useCallback, useEffect, useRef, type CSSProperties, type ReactNode } from 'react'
+import { Sparkle, X, PaperPlaneRight, Plus, Link } from '@phosphor-icons/react'
 import { AiMessage } from './AiMessage'
 import { Button } from '@/components/ui/button'
 import { ActionTooltip } from '@/components/ui/action-tooltip'
@@ -15,6 +15,7 @@ import type { AiAgentMessage } from '../hooks/useCliAiAgent'
 import type { AiAgentReadiness } from '../lib/aiAgents'
 import type { NoteReference } from '../utils/ai-context'
 import type { VaultEntry } from '../types'
+import { cn } from '@/lib/utils'
 
 interface AiPanelHeaderProps {
   agentLabel: string
@@ -40,8 +41,11 @@ interface AiPanelMessageHistoryProps {
   locale?: AppLocale
   messages: AiAgentMessage[]
   isActive: boolean
+  onForkMessage?: (messageId: string) => void
   onOpenNote?: (path: string) => void
   onNavigateWikilink?: (target: string) => void
+  onRegenerateMessage?: (messageId: string) => void
+  onScrollStateChange?: (scrolled: boolean) => void
   hasContext: boolean
 }
 
@@ -53,6 +57,7 @@ interface AiPanelComposerProps {
   input: string
   inputRef: React.RefObject<HTMLDivElement | null>
   isActive: boolean
+  controls?: ReactNode
   onChange: (value: string) => void
   onSend: (text: string, references: NoteReference[]) => void
   onUnsupportedAiPaste?: (message: string) => void
@@ -72,6 +77,110 @@ function getComposerPlaceholder(
   }
 
   return t('ai.panel.placeholder.ready', { agent: agentLabel })
+}
+
+function composerSendButtonStyle(canSend: boolean): CSSProperties {
+  return {
+    background: canSend ? 'var(--primary)' : 'var(--muted)',
+    color: canSend ? 'var(--primary-foreground)' : 'var(--muted-foreground)',
+    borderRadius: 8,
+    width: 30,
+    height: 30,
+    cursor: canSend ? 'pointer' : 'not-allowed',
+  }
+}
+
+function ComposerInput({
+  disabled,
+  entries,
+  hasControls,
+  input,
+  inputRef,
+  onChange,
+  onSend,
+  onUnsupportedAiPaste,
+  placeholder,
+}: {
+  disabled: boolean
+  entries: VaultEntry[]
+  hasControls: boolean
+  input: string
+  inputRef: React.RefObject<HTMLDivElement | null>
+  onChange: (value: string) => void
+  onSend: (text: string, references: NoteReference[]) => void
+  onUnsupportedAiPaste?: (message: string) => void
+  placeholder: string
+}) {
+  return (
+    <WikilinkChatInput
+      entries={entries}
+      value={input}
+      onChange={onChange}
+      onSend={onSend}
+      onUnsupportedPaste={onUnsupportedAiPaste}
+      disabled={disabled}
+      placeholder={placeholder}
+      placeholderClassName={hasControls ? 'px-2 py-1.5 text-[13px] leading-5' : undefined}
+      inputRef={inputRef}
+      editorClassName={cn(
+        'max-h-[120px] overflow-y-auto overscroll-contain',
+        hasControls && 'min-h-[34px] border-0 px-2 py-1.5 leading-5',
+      )}
+      editorStyle={{ maxHeight: 120, overflowY: 'auto', overscrollBehavior: 'contain' }}
+    />
+  )
+}
+
+function ComposerSendButton({
+  canSend,
+  entries,
+  input,
+  label,
+  onSend,
+}: {
+  canSend: boolean
+  entries: VaultEntry[]
+  input: string
+  label: string
+  onSend: (text: string, references: NoteReference[]) => void
+}) {
+  return (
+    <Button
+      type="button"
+      variant="ghost"
+      size="icon-sm"
+      className="shrink-0 flex items-center justify-center border-none cursor-pointer transition-colors"
+      style={composerSendButtonStyle(canSend)}
+      onClick={() => onSend(input, extractInlineWikilinkReferences(input, entries))}
+      disabled={!canSend}
+      aria-label={label}
+      title={label}
+      data-testid="agent-send"
+    >
+      <PaperPlaneRight size={16} />
+    </Button>
+  )
+}
+
+function ComposerControlsRow({
+  children,
+  hasControls,
+  sendButton,
+}: {
+  children?: ReactNode
+  hasControls: boolean
+  sendButton: ReactNode
+}) {
+  if (!hasControls) return <>{sendButton}</>
+
+  return (
+    <div className="mt-0.5 flex items-center justify-between gap-2">
+      <div className="flex min-w-0 items-center gap-1">
+        {children}
+      </div>
+      {sendButton}
+    </div>
+  )
 }
 
 function permissionModeTooltip(
@@ -115,7 +224,7 @@ function AiPanelEmptyState({
         className="flex flex-col items-center justify-center text-center text-muted-foreground"
         style={{ paddingTop: 40 }}
       >
-        <Robot size={24} style={{ marginBottom: 8, opacity: 0.5 }} />
+        <Sparkle size={24} style={{ marginBottom: 8, opacity: 0.5 }} />
         <p style={{ fontSize: 13, margin: '0 0 4px' }}>
           {t('ai.panel.empty.checkingTitle')}
         </p>
@@ -132,7 +241,7 @@ function AiPanelEmptyState({
         className="flex flex-col items-center justify-center text-center text-muted-foreground"
         style={{ paddingTop: 40 }}
       >
-        <Robot size={24} style={{ marginBottom: 8, opacity: 0.5 }} />
+        <Sparkle size={24} style={{ marginBottom: 8, opacity: 0.5 }} />
         <p style={{ fontSize: 13, margin: '0 0 4px' }}>
           {t('ai.panel.empty.missingTitle', { agent: agentLabel })}
         </p>
@@ -148,7 +257,7 @@ function AiPanelEmptyState({
       className="flex flex-col items-center justify-center text-center text-muted-foreground"
       style={{ paddingTop: 40 }}
     >
-      <Robot size={24} style={{ marginBottom: 8, opacity: 0.5 }} />
+      <Sparkle size={24} style={{ marginBottom: 8, opacity: 0.5 }} />
       <p style={{ fontSize: 13, margin: '0 0 4px' }}>
         {hasContext
           ? t('ai.panel.empty.withContextTitle', { agent: agentLabel })
@@ -187,7 +296,7 @@ export const AiPanelHeader = memo(function AiPanelHeader({
       style={{ padding: '8px 12px', gap: 8 }}
     >
       <div className="flex items-center" style={{ gap: 8 }}>
-        <Robot size={16} className="shrink-0 text-muted-foreground" />
+        <Sparkle size={16} className="shrink-0 text-muted-foreground" />
         <div className="flex flex-1 flex-col overflow-hidden">
           <span className="text-muted-foreground" style={{ fontSize: 13, fontWeight: 600 }}>
             {t('ai.panel.title')}
@@ -317,18 +426,31 @@ export const AiPanelMessageHistory = memo(function AiPanelMessageHistory({
   locale = 'en',
   messages,
   isActive,
+  onForkMessage,
   onOpenNote,
   onNavigateWikilink,
+  onRegenerateMessage,
+  onScrollStateChange,
   hasContext,
 }: AiPanelMessageHistoryProps) {
+  const containerRef = useRef<HTMLDivElement>(null)
   const endRef = useRef<HTMLDivElement>(null)
 
+  const updateScrollState = useCallback(() => {
+    const element = containerRef.current
+    onScrollStateChange?.((element?.scrollTop ?? 0) > 1)
+  }, [onScrollStateChange])
+
   useEffect(() => {
+    void isActive
+    void messages
     endRef.current?.scrollIntoView({ behavior: 'smooth' })
-  }, [messages, isActive])
+    if (typeof window.requestAnimationFrame === 'function') window.requestAnimationFrame(updateScrollState)
+    else updateScrollState()
+  }, [messages, isActive, updateScrollState])
 
   return (
-    <div className="flex-1 overflow-y-auto" style={{ padding: 12 }}>
+    <div ref={containerRef} className="flex-1 overflow-y-auto" style={{ padding: 12 }} onScroll={updateScrollState}>
       {messages.length === 0 && !isActive && (
         <AiPanelEmptyState
           agentLabel={agentLabel}
@@ -341,8 +463,12 @@ export const AiPanelMessageHistory = memo(function AiPanelMessageHistory({
         <AiMessage
           key={message.id ?? index}
           {...message}
+          locale={locale}
+          messageId={message.id}
+          onFork={onForkMessage}
           onOpenNote={onOpenNote}
           onNavigateWikilink={onNavigateWikilink}
+          onRegenerate={onRegenerateMessage}
         />
       ))}
       <div ref={endRef} />
@@ -358,6 +484,7 @@ export function AiPanelComposer({
   input,
   inputRef,
   isActive,
+  controls,
   onChange,
   onSend,
   onUnsupportedAiPaste,
@@ -366,49 +493,41 @@ export function AiPanelComposer({
   const composerDisabled = isActive || agentReadiness !== 'ready'
   const canSend = !composerDisabled && input.trim().length > 0
   const placeholder = getComposerPlaceholder(agentLabel, agentReadiness, t)
-  const sendButtonStyle = {
-    background: canSend ? 'var(--primary)' : 'var(--muted)',
-    color: canSend ? 'var(--primary-foreground)' : 'var(--muted-foreground)',
-    borderRadius: 8,
-    width: 32,
-    height: 34,
-    cursor: canSend ? 'pointer' : 'not-allowed',
-  } as const
+  const hasControls = controls !== undefined && controls !== null
+  const sendButton = (
+    <ComposerSendButton
+      canSend={canSend}
+      entries={entries}
+      input={input}
+      label={t('ai.panel.send')}
+      onSend={onSend}
+    />
+  )
 
   return (
     <div
-      className="flex shrink-0 flex-col border-t border-border"
-      style={{ padding: '8px 12px' }}
+      className="flex shrink-0 flex-col"
+      style={{ padding: '6px 10px' }}
     >
-      <div className="flex items-end gap-2">
-        <div className="min-w-0 flex-1">
-          <WikilinkChatInput
+      <div className={cn(
+        hasControls ? 'rounded-xl border border-border bg-background px-2 py-1.5 shadow-xs' : 'flex items-end gap-2',
+      )}>
+        <div className={cn('min-w-0 flex-1', hasControls && 'w-full')}>
+          <ComposerInput
+            disabled={composerDisabled}
             entries={entries}
-            value={input}
+            hasControls={hasControls}
+            input={input}
+            inputRef={inputRef}
             onChange={onChange}
             onSend={onSend}
-            onUnsupportedPaste={onUnsupportedAiPaste}
-            disabled={composerDisabled}
+            onUnsupportedAiPaste={onUnsupportedAiPaste}
             placeholder={placeholder}
-            inputRef={inputRef}
-            editorClassName="max-h-[160px] overflow-y-auto overscroll-contain"
-            editorStyle={{ maxHeight: 160, overflowY: 'auto', overscrollBehavior: 'contain' }}
           />
         </div>
-        <Button
-          type="button"
-          variant="ghost"
-          size="icon-sm"
-          className="shrink-0 flex items-center justify-center border-none cursor-pointer transition-colors"
-          style={sendButtonStyle}
-          onClick={() => onSend(input, extractInlineWikilinkReferences(input, entries))}
-          disabled={!canSend}
-          aria-label={t('ai.panel.send')}
-          title={t('ai.panel.send')}
-          data-testid="agent-send"
-        >
-          <PaperPlaneRight size={16} />
-        </Button>
+        <ComposerControlsRow hasControls={hasControls} sendButton={sendButton}>
+          {controls}
+        </ComposerControlsRow>
       </div>
     </div>
   )

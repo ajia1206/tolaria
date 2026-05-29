@@ -97,7 +97,7 @@ type NoteItemSurfaceProps = {
   testId?: string
 }
 
-const NOTE_ITEM_BASE_CLASS_NAME = 'relative border-b border-[var(--border)] transition-colors'
+const NOTE_ITEM_BASE_CLASS_NAME = 'relative w-full border-0 border-b border-[var(--border)] bg-transparent p-0 text-left transition-colors'
 const BINARY_NOTE_STYLE: CSSProperties = { padding: '14px 16px' }
 const NOTE_ITEM_ROW_CLASS_NAMES: Record<NoteItemRowState, string> = {
   binary: 'cursor-default opacity-50',
@@ -369,13 +369,19 @@ function createNoteItemClickHandler(
   isUnavailableBinary: boolean,
   onClickNote: NoteItemProps['onClickNote'],
 ) {
+  const isPropertyChipTarget = (event: ReactMouseEvent) =>
+    event.target instanceof Element && event.target.closest('[data-property-chip="true"]') !== null
+
   if (isUnavailableBinary) {
     return (event: ReactMouseEvent) => {
       event.preventDefault()
       event.stopPropagation()
     }
   }
-  return (event: ReactMouseEvent) => onClickNote(entry, event)
+  return (event: ReactMouseEvent) => {
+    if (isPropertyChipTarget(event)) return
+    onClickNote(entry, event)
+  }
 }
 
 function resolveNoteItemSurfaceStyle({
@@ -452,18 +458,24 @@ function resolveNoteItemSurfaceProps({
 function NoteItemRow({
   surfaceProps,
   entryPath,
+  isSelected,
+  isMultiSelected,
   isHighlighted,
   changeStatus,
   children,
 }: {
   surfaceProps: NoteItemSurfaceProps
   entryPath: string
+  isSelected: boolean
+  isMultiSelected: boolean
   isHighlighted: boolean
   changeStatus: NoteItemProps['changeStatus']
   children: ReactNode
 }) {
   return (
     <div
+      role="option"
+      aria-selected={isSelected || isMultiSelected}
       className={surfaceProps.className}
       style={surfaceProps.style}
       onClick={surfaceProps.onClick}
@@ -559,6 +571,8 @@ export function NoteItem({ entry, isSelected, isMultiSelected = false, isHighlig
     <NoteItemRow
       surfaceProps={surfaceProps}
       entryPath={entry.path}
+      isSelected={isSelected}
+      isMultiSelected={isMultiSelected}
       isHighlighted={isHighlighted}
       changeStatus={changeStatus}
     >

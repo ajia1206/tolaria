@@ -14,6 +14,13 @@ import {
 
 let tempVaultDir: string
 
+const GLOBAL_SEARCH_INPUT = 'input[placeholder="Search in all notes..."]'
+const GLOBAL_SEARCH_RESULTS = [
+  { title: 'First Search Result', path: '/vault/first-search-result.md', snippet: 'first', score: 1, note_type: null },
+  { title: 'Second Search Result', path: '/vault/second-search-result.md', snippet: 'second', score: 0.9, note_type: null },
+  { title: 'Third Search Result', path: '/vault/third-search-result.md', snippet: 'third', score: 0.8, note_type: null },
+]
+
 async function openAlphaProjectInEditor(page: Page) {
   await openFixtureVaultDesktopHarness(page, tempVaultDir)
   await page.getByText('Alpha Project', { exact: true }).first().click()
@@ -56,6 +63,38 @@ async function expectPropertiesPanelToggle(page: Page, toggle: () => Promise<voi
 
   await toggle()
   await expect(page.getByRole('button', { name: 'Open the properties panel' })).toBeVisible({ timeout: 5_000 })
+}
+
+async function dispatchAppCommand(page: Page, id: string): Promise<void> {
+  await page.evaluate((commandId) => {
+    const bridge = window.__laputaTest?.dispatchAppCommand
+    if (typeof bridge !== 'function') {
+      throw new Error('Tolaria test bridge is missing dispatchAppCommand')
+    }
+    bridge(commandId)
+  }, id)
+}
+
+async function installGlobalSearchResultsHarness(page: Page): Promise<void> {
+  await page.waitForFunction(() => Boolean(window.__mockHandlers?.search_vault))
+  await page.evaluate((results) => {
+    type Handler = (args?: Record<string, unknown>) => unknown
+    const handlers = window.__mockHandlers as Record<string, Handler>
+    Object.defineProperty(window, '__mockHandlers', {
+      configurable: true,
+      get: () => handlers,
+      set: (nextHandlers) => Object.assign(handlers, nextHandlers),
+    })
+    handlers.search_vault = () => ({ results, elapsed_ms: 1 })
+  }, GLOBAL_SEARCH_RESULTS)
+}
+
+function searchResultRow(page: Page, title: string) {
+  return page.locator('[role="option"]').filter({ hasText: title }).first()
+}
+
+async function expectSelectedSearchResult(page: Page, title: string): Promise<void> {
+  await expect(searchResultRow(page, title)).toHaveClass(/bg-accent/)
 }
 
 test.describe('keyboard command routing', () => {
@@ -125,6 +164,37 @@ test.describe('keyboard command routing', () => {
     await expect(page.locator('input[placeholder="Search notes..."]')).toBeFocused()
   })
 
+  test('global search arrow keys move one result at a time @smoke', async ({ page }) => {
+    await openFixtureVaultDesktopHarness(page, tempVaultDir)
+    await installGlobalSearchResultsHarness(page)
+
+    await page.locator('body').click()
+    await dispatchShortcutEvent(page, {
+      key: 'f',
+      code: 'KeyF',
+      ctrlKey: false,
+      metaKey: true,
+      shiftKey: true,
+      altKey: false,
+      bubbles: true,
+      cancelable: true,
+    })
+    const input = page.locator(GLOBAL_SEARCH_INPUT)
+    await expect(input).toBeVisible({ timeout: 5_000 })
+    await input.fill('search')
+    await expect(searchResultRow(page, 'Third Search Result')).toBeVisible({ timeout: 5_000 })
+
+    await expectSelectedSearchResult(page, 'First Search Result')
+    await page.keyboard.press('ArrowDown')
+    await expectSelectedSearchResult(page, 'Second Search Result')
+    await page.waitForTimeout(550)
+    await page.keyboard.press('ArrowDown')
+    await expectSelectedSearchResult(page, 'Third Search Result')
+    await page.waitForTimeout(550)
+    await page.keyboard.press('ArrowUp')
+    await expectSelectedSearchResult(page, 'Second Search Result')
+  })
+
   test('desktop menu-command bridge toggles organized state through the shared command path @smoke', async ({ page }) => {
     await openAlphaProjectInEditor(page)
 
@@ -135,6 +205,19 @@ test.describe('keyboard command routing', () => {
 
     await triggerMenuCommand(page, APP_COMMAND_IDS.noteToggleOrganized)
     await expect(page.getByRole('button', { name: 'Set note as organized' })).toBeVisible({ timeout: 5_000 })
+  })
+
+  test('app command bridge undoes and redoes organized state through action history @smoke', async ({ page }) => {
+    await openAlphaProjectInEditor(page)
+
+    await triggerMenuCommand(page, APP_COMMAND_IDS.noteToggleOrganized)
+    await expect(page.getByRole('button', { name: 'Set note as not organized' })).toBeVisible({ timeout: 5_000 })
+
+    await dispatchAppCommand(page, APP_COMMAND_IDS.editUndo)
+    await expect(page.getByRole('button', { name: 'Set note as organized' })).toBeVisible({ timeout: 5_000 })
+
+    await dispatchAppCommand(page, APP_COMMAND_IDS.editRedo)
+    await expect(page.getByRole('button', { name: 'Set note as not organized' })).toBeVisible({ timeout: 5_000 })
   })
 
   test('renderer shortcut bridge toggles the raw editor through the shared keyboard handler @smoke', async ({ page }) => {
@@ -170,7 +253,7 @@ test.describe('keyboard command routing', () => {
 
     await triggerMenuCommand(page, APP_COMMAND_IDS.viewToggleAiChat)
     await expect(page.getByTestId('ai-panel')).toBeVisible({ timeout: 5_000 })
-    await expect(page.getByTitle('Close AI panel')).toBeVisible()
+    await expect(page.getByTitle('Close AI workspace')).toBeVisible()
 
     await triggerMenuCommand(page, APP_COMMAND_IDS.viewToggleAiChat)
     await expect(page.getByTestId('ai-panel')).not.toBeVisible({ timeout: 5_000 })

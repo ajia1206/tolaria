@@ -1,5 +1,7 @@
 import { CaretUpDown as ChevronsUpDown, Sparkle, Warning as AlertTriangle } from '@phosphor-icons/react'
+import { forwardRef, type ComponentPropsWithoutRef } from 'react'
 import { Button } from '@/components/ui/button'
+import { AiAgentIcon } from '@/components/AiAgentIcon'
 import {
   AI_AGENT_DEFINITIONS,
   getAiAgentAvailability,
@@ -26,7 +28,6 @@ import {
   type VaultAiGuidanceStatus,
 } from '../../lib/vaultAiGuidance'
 import { translate, type AppLocale } from '../../lib/i18n'
-import { openExternalUrl } from '../../utils/url'
 import {
   DropdownMenu,
   DropdownMenuContent,
@@ -48,6 +49,7 @@ interface AiAgentsBadgeProps {
   onSetDefaultAgent?: (agent: AiAgentId) => void
   onSetDefaultTarget?: (target: string) => void
   onRestoreGuidance?: () => void
+  onOpenWorkspace?: () => void
   compact?: boolean
   locale?: AppLocale
 }
@@ -80,10 +82,6 @@ function badgeTooltip(
 
 function installedAgentDefinitions(statuses: AiAgentsStatus): AiAgentDefinition[] {
   return AI_AGENT_DEFINITIONS.filter((definition) => isAiAgentInstalled(statuses, definition.id))
-}
-
-function missingAgentDefinitions(statuses: AiAgentsStatus): AiAgentDefinition[] {
-  return AI_AGENT_DEFINITIONS.filter((definition) => !isAiAgentInstalled(statuses, definition.id))
 }
 
 function triggerLabel(defaultAgent: AiAgentId): string {
@@ -150,6 +148,68 @@ function TriggerStateIcon({
   return null
 }
 
+function TriggerLeadingIcon({
+  selectedTarget,
+  showWarning,
+}: {
+  selectedTarget: AiTarget
+  showWarning: boolean
+}) {
+  if (showWarning) return <AlertTriangle size={13} weight="regular" />
+  if (selectedTarget.kind === 'agent') return <AiAgentIcon agent={selectedTarget.agent} size={13} />
+  return <Sparkle size={13} weight="regular" />
+}
+
+function targetTriggerText(selectedTarget: AiTarget, defaultAgent: AiAgentId): string {
+  return selectedTarget.kind === 'api_model' ? selectedTarget.shortLabel : triggerLabel(defaultAgent)
+}
+
+function triggerIconColor(showWarning: boolean): string {
+  return showWarning ? 'var(--accent-orange)' : 'var(--muted-foreground)'
+}
+
+type AiAgentsBadgeButtonProps = ComponentPropsWithoutRef<typeof Button> & {
+  ariaLabel: string
+  compact: boolean
+  defaultAgent: AiAgentId
+  selectedTarget: AiTarget
+  showSwitcherCue: boolean
+  showWarning: boolean
+  title: string
+}
+
+const AiAgentsBadgeButton = forwardRef<HTMLButtonElement, AiAgentsBadgeButtonProps>(function AiAgentsBadgeButton({
+  ariaLabel,
+  compact,
+  defaultAgent,
+  selectedTarget,
+  showSwitcherCue,
+  showWarning,
+  title,
+  ...buttonProps
+}, ref) {
+  return (
+    <Button
+      ref={ref}
+      type="button"
+      variant="ghost"
+      size="xs"
+      className={triggerButtonClassName(compact)}
+      aria-label={ariaLabel}
+      title={title}
+      data-tooltip-mode="native-title"
+      data-testid="status-ai-agents"
+      {...buttonProps}
+    >
+      <span style={{ ...ICON_STYLE, color: triggerIconColor(showWarning) }}>
+        <TriggerLeadingIcon selectedTarget={selectedTarget} showWarning={showWarning} />
+        {!compact && targetTriggerText(selectedTarget, defaultAgent)}
+        <TriggerStateIcon showWarning={showWarning} showSwitcherCue={showSwitcherCue} />
+      </span>
+    </Button>
+  )
+})
+
 function GuidanceMenuSection({
   guidanceStatus,
   locale = 'en',
@@ -188,7 +248,6 @@ function AgentMenuContent({
   locale = 'en',
 }: AiAgentsBadgeProps & { selectedTarget: AiTarget; selectedAgentReady: boolean }) {
   const installedAgents = installedAgentDefinitions(statuses)
-  const missingAgents = missingAgentDefinitions(statuses)
   const modelTargets = configuredModelTargets(providers)
   const selectedAgentValue = selectedTarget.kind === 'agent' && selectedAgentReady ? selectedTarget.agent : undefined
 
@@ -211,7 +270,8 @@ function AgentMenuContent({
           }}
         >
           {installedAgents.map((definition) => (
-            <DropdownMenuRadioItem key={definition.id} value={definition.id}>
+            <DropdownMenuRadioItem key={definition.id} value={definition.id} className="gap-2">
+              <AiAgentIcon agent={definition.id} size={16} />
               <span>{definition.label}</span>
               <span className="ml-auto text-xs text-muted-foreground">
                 {statusText(statuses, definition)}
@@ -226,20 +286,6 @@ function AgentMenuContent({
         locale={locale}
         onSetDefaultTarget={onSetDefaultTarget}
       />
-      {missingAgents.length > 0 && (
-        <>
-          <DropdownMenuSeparator />
-          <DropdownMenuLabel>{translate(locale, 'status.ai.install')}</DropdownMenuLabel>
-          {missingAgents.map((definition) => (
-            <DropdownMenuItem
-              key={definition.id}
-              onSelect={() => void openExternalUrl(definition.installUrl)}
-            >
-              {translate(locale, 'status.ai.installAgent', { agent: definition.label })}
-            </DropdownMenuItem>
-          ))}
-        </>
-      )}
       <GuidanceMenuSection
         guidanceStatus={guidanceStatus}
         locale={locale}
@@ -294,6 +340,7 @@ export function AiAgentsBadge({
   onSetDefaultAgent,
   onSetDefaultTarget,
   onRestoreGuidance,
+  onOpenWorkspace,
   compact = false,
   locale = 'en',
 }: AiAgentsBadgeProps) {
@@ -311,27 +358,23 @@ export function AiAgentsBadge({
 
   if (isAiAgentsStatusChecking(statuses)) return null
 
+  if (onOpenWorkspace) {
+    const label = translate(locale, 'status.ai.openWorkspace')
+
+    return (
+      <>
+        <CompactSeparator compact={compact} />
+        <AiAgentsBadgeButton ariaLabel={label} compact={compact} defaultAgent={defaultAgent} onClick={onOpenWorkspace} selectedTarget={selectedTarget} showSwitcherCue={showSwitcherCue} showWarning={showWarning} title={label} />
+      </>
+    )
+  }
+
   return (
     <>
       <CompactSeparator compact={compact} />
       <DropdownMenu>
         <DropdownMenuTrigger asChild={true}>
-          <Button
-            type="button"
-            variant="ghost"
-            size="xs"
-            className={triggerButtonClassName(compact)}
-            aria-label={translate(locale, 'status.ai.openOptions')}
-            title={tooltip}
-            data-tooltip-mode="native-title"
-            data-testid="status-ai-agents"
-          >
-            <span style={{ ...ICON_STYLE, color: showWarning ? 'var(--accent-orange)' : 'var(--muted-foreground)' }}>
-              <Sparkle size={13} weight="regular" />
-              {!compact && (selectedTarget.kind === 'api_model' ? selectedTarget.shortLabel : triggerLabel(defaultAgent))}
-              <TriggerStateIcon showWarning={showWarning} showSwitcherCue={showSwitcherCue} />
-            </span>
-          </Button>
+          <AiAgentsBadgeButton ariaLabel={translate(locale, 'status.ai.openOptions')} compact={compact} defaultAgent={defaultAgent} selectedTarget={selectedTarget} showSwitcherCue={showSwitcherCue} showWarning={showWarning} title={tooltip} />
         </DropdownMenuTrigger>
         <AgentMenuContent
           statuses={statuses}

@@ -20,6 +20,32 @@ interface SearchPanelProps {
 }
 
 type SearchKeyboardAction = 'close' | 'next' | 'previous' | 'select'
+// WKWebView can emit duplicate non-text navigation keydowns around native key injection.
+const NATIVE_KEYDOWN_DUPLICATE_WINDOW_MS = 500
+const handledSearchKeyboardEvents = new WeakSet<Event>()
+
+interface SearchKeyboardEvent {
+  key: string
+  nativeEvent?: Event
+  preventDefault: () => void
+  repeat?: boolean
+  stopImmediatePropagation?: () => void
+  stopPropagation?: () => void
+  timeStamp?: number
+}
+
+interface SearchKeydownRecord {
+  key: string
+  timeStamp: number
+}
+
+interface SearchKeyboardActionContext {
+  handleSelect: (result: SearchResult) => void
+  onClose: () => void
+  resultsRef: React.MutableRefObject<SearchResult[]>
+  selectedIndexRef: React.MutableRefObject<number>
+  setSelectedIndex: React.Dispatch<React.SetStateAction<number>>
+}
 
 function resolveSearchKeyboardAction(key: string): SearchKeyboardAction | null {
   switch (key) {
@@ -41,8 +67,119 @@ function nextSearchSelectionIndex(
   currentIndex: number,
   resultCount: number,
 ): number {
+  if (resultCount <= 0) return 0
   if (action === 'next') return Math.min(currentIndex + 1, resultCount - 1)
   return Math.max(currentIndex - 1, 0)
+}
+
+function shouldHandleKeydown(
+  event: SearchKeyboardEvent,
+  pressedKeys: Set<string>,
+  handledEvents: WeakSet<Event>,
+  recentKeydownRef: React.MutableRefObject<SearchKeydownRecord | null>,
+): boolean {
+  const eventIdentity = resolveSearchKeyboardEventIdentity(event)
+  if (eventIdentity) {
+    if (handledEvents.has(eventIdentity)) return false
+    handledEvents.add(eventIdentity)
+  }
+
+  if (isDuplicateNativeKeydown(event, recentKeydownRef.current)) {
+    return false
+  }
+
+  rememberSearchKeydown(event, recentKeydownRef)
+  if (event.repeat) return true
+  if (pressedKeys.has(event.key)) return false
+
+  pressedKeys.add(event.key)
+  return true
+}
+
+function isDuplicateNativeKeydown(
+  event: SearchKeyboardEvent,
+  previous: SearchKeydownRecord | null,
+): boolean {
+  const timeStamp = resolveSearchKeyboardEventTimestamp(event)
+  if (!previous || timeStamp === null || previous.key !== event.key) return false
+
+  const elapsedMs = timeStamp - previous.timeStamp
+  return elapsedMs >= 0 && elapsedMs <= NATIVE_KEYDOWN_DUPLICATE_WINDOW_MS
+}
+
+function rememberSearchKeydown(
+  event: SearchKeyboardEvent,
+  recentKeydownRef: React.MutableRefObject<SearchKeydownRecord | null>,
+) {
+  const timeStamp = resolveSearchKeyboardEventTimestamp(event)
+  if (timeStamp !== null) recentKeydownRef.current = { key: event.key, timeStamp }
+}
+
+function resolveSearchKeyboardEventTimestamp(event: SearchKeyboardEvent): number | null {
+  if (typeof performance !== 'undefined' && typeof performance.now === 'function') return performance.now()
+
+  const { timeStamp } = event
+  return typeof timeStamp === 'number' && Number.isFinite(timeStamp) ? timeStamp : null
+}
+
+function resolveSearchKeyboardEventIdentity(event: SearchKeyboardEvent): Event | null {
+  if (event.nativeEvent instanceof Event) return event.nativeEvent
+  if (event instanceof Event) return event
+  return null
+}
+
+function applySearchSelection(
+  action: Extract<SearchKeyboardAction, 'next' | 'previous'>,
+  resultsRef: React.MutableRefObject<SearchResult[]>,
+  selectedIndexRef: React.MutableRefObject<number>,
+  setSelectedIndex: React.Dispatch<React.SetStateAction<number>>,
+) {
+  const nextIndex = nextSearchSelectionIndex(action, selectedIndexRef.current, resultsRef.current.length)
+  selectedIndexRef.current = nextIndex
+  setSelectedIndex(nextIndex)
+}
+
+function performSearchKeyboardAction(action: SearchKeyboardAction, context: SearchKeyboardActionContext) {
+  if (action === 'close') {
+    context.onClose()
+    return
+  }
+
+  if (action === 'select') {
+    const result = context.resultsRef.current[context.selectedIndexRef.current]
+    if (result) context.handleSelect(result)
+    return
+  }
+
+  applySearchSelection(action, context.resultsRef, context.selectedIndexRef, context.setSelectedIndex)
+}
+
+function useSearchKeyboardDocumentListeners({
+  handleKeyDown,
+  handleKeyUp,
+  open,
+  pressedKeysRef,
+}: {
+  handleKeyDown: (event: KeyboardEvent) => void
+  handleKeyUp: (event: KeyboardEvent) => void
+  open: boolean
+  pressedKeysRef: React.MutableRefObject<Set<string>>
+}) {
+  useEffect(() => {
+    const pressedKeys = pressedKeysRef.current
+    if (!open) {
+      pressedKeys.clear()
+      return
+    }
+
+    document.addEventListener('keydown', handleKeyDown, true)
+    document.addEventListener('keyup', handleKeyUp, true)
+    return () => {
+      document.removeEventListener('keydown', handleKeyDown, true)
+      document.removeEventListener('keyup', handleKeyUp, true)
+      pressedKeys.clear()
+    }
+  }, [handleKeyDown, handleKeyUp, open, pressedKeysRef])
 }
 
 function searchVaultPathsForEntries(entries: VaultEntry[], fallbackVaultPath: string): string | string[] {
@@ -95,33 +232,25 @@ function useSearchKeyboard({
   selectedIndexRef: React.MutableRefObject<number>
   setSelectedIndex: React.Dispatch<React.SetStateAction<number>>
 }) {
-  const handleKeyDown = useCallback((e: { key: string; preventDefault: () => void }) => {
+  const pressedKeysRef = useRef(new Set<string>())
+  const recentKeydownRef = useRef<SearchKeydownRecord | null>(null)
+  const handleKeyDown = useCallback((e: SearchKeyboardEvent) => {
     const action = resolveSearchKeyboardAction(e.key)
     if (!action) return
 
     e.preventDefault()
-    if (action === 'close') {
-      onClose()
-      return
-    }
+    e.stopImmediatePropagation?.()
+    e.stopPropagation?.()
+    if (!shouldHandleKeydown(e, pressedKeysRef.current, handledSearchKeyboardEvents, recentKeydownRef)) return
 
-    if (action === 'select') {
-      const result = resultsRef.current[selectedIndexRef.current]
-      if (result) handleSelect(result)
-      return
-    }
-
-    setSelectedIndex(i => nextSearchSelectionIndex(action, i, resultsRef.current.length))
+    performSearchKeyboardAction(action, { handleSelect, onClose, resultsRef, selectedIndexRef, setSelectedIndex })
   }, [handleSelect, onClose, resultsRef, selectedIndexRef, setSelectedIndex])
 
-  useEffect(() => {
-    if (!open) return
-    const handleKey = (e: KeyboardEvent) => handleKeyDown(e)
-    window.addEventListener('keydown', handleKey)
-    return () => window.removeEventListener('keydown', handleKey)
-  }, [open, handleKeyDown])
+  const handleKeyUp = useCallback((e: { key: string }) => {
+    if (resolveSearchKeyboardAction(e.key)) pressedKeysRef.current.delete(e.key)
+  }, [])
 
-  return handleKeyDown
+  useSearchKeyboardDocumentListeners({ handleKeyDown, handleKeyUp, open, pressedKeysRef })
 }
 
 function useSearchPanelController({ open, vaultPath, entries, onSelectNote, onClose }: SearchPanelProps) {
@@ -150,7 +279,7 @@ function useSearchPanelController({ open, vaultPath, entries, onSelectNote, onCl
     if (open) setTimeout(() => inputRef.current?.focus(), 50)
   }, [open])
 
-  const handleKeyDown = useSearchKeyboard({
+  useSearchKeyboard({
     open,
     onClose,
     handleSelect,
@@ -162,7 +291,6 @@ function useSearchPanelController({ open, vaultPath, entries, onSelectNote, onCl
 
   return {
     elapsedMs,
-    handleKeyDown,
     handleSelect,
     inputRef,
     listRef,
@@ -184,10 +312,10 @@ export function SearchPanel({
   onClose,
 }: SearchPanelProps) {
   const dateDisplayFormat = useDateDisplayFormat()
+  const rootRef = useRef<HTMLDivElement>(null)
   const {
     elapsedMs,
     entryLookup,
-    handleKeyDown,
     handleSelect,
     inputRef,
     listRef,
@@ -200,24 +328,44 @@ export function SearchPanel({
     showWorkspace,
     typeEntryMap,
   } = useSearchPanelController({ open, vaultPath, entries, onSelectNote, onClose })
+  const handleResultHover = useCallback((index: number, event: React.MouseEvent<HTMLDivElement>) => {
+    if (shouldApplySearchResultHover(event)) setSelectedIndex(index)
+  }, [setSelectedIndex])
+
+  useEffect(() => {
+    if (!open) return
+    const root = rootRef.current
+    if (!root) return
+
+    const handleRootClick = (event: MouseEvent) => {
+      if (event.target === root) onClose()
+    }
+
+    root.addEventListener('click', handleRootClick)
+    return () => root.removeEventListener('click', handleRootClick)
+  }, [open, onClose])
 
   if (!open) return null
 
   return (
     <div
+      ref={rootRef}
       className="fixed inset-0 z-[1000] flex justify-center bg-[var(--shadow-dialog)] pt-[15vh]"
-      onClick={onClose}
     >
+      <button
+        type="button"
+        aria-label="Close search"
+        className="absolute inset-0 z-0 cursor-default border-0 bg-transparent p-0"
+        onClick={onClose}
+      />
       <div
-        className="flex w-[540px] max-w-[90vw] max-h-[480px] flex-col self-start overflow-hidden rounded-xl border border-[var(--border-dialog)] bg-popover shadow-[0_8px_32px_var(--shadow-dialog)]"
-        onClick={e => e.stopPropagation()}
+        className="relative z-10 flex w-[540px] max-w-[90vw] max-h-[480px] flex-col self-start overflow-hidden rounded-xl border border-[var(--border-dialog)] bg-popover shadow-[0_8px_32px_var(--shadow-dialog)]"
       >
         <SearchInput
           ref={inputRef}
           query={query}
           loading={loading}
           onChange={setQuery}
-          onKeyDown={handleKeyDown}
         />
         <SearchContent
           query={query}
@@ -231,7 +379,7 @@ export function SearchPanel({
           dateDisplayFormat={dateDisplayFormat}
           listRef={listRef}
           onSelect={handleSelect}
-          onHover={setSelectedIndex}
+          onHover={handleResultHover}
         />
       </div>
     </div>
@@ -242,14 +390,13 @@ interface SearchInputProps {
   query: string
   loading: boolean
   onChange: (value: string) => void
-  onKeyDown?: React.KeyboardEventHandler<HTMLInputElement>
 }
 
 const SearchInput = forwardRef<HTMLInputElement, SearchInputProps>(
-  function SearchInput({ query, loading, onChange, onKeyDown }, ref) {
+  function SearchInput({ query, loading, onChange }, ref) {
     return (
       <div className="flex items-center gap-3 border-b border-border px-4 py-3">
-        <svg className="h-4 w-4 shrink-0 text-muted-foreground" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+        <svg aria-hidden="true" className="h-4 w-4 shrink-0 text-muted-foreground" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
           <circle cx="11" cy="11" r="8" />
           <path d="m21 21-4.35-4.35" />
         </svg>
@@ -260,10 +407,10 @@ const SearchInput = forwardRef<HTMLInputElement, SearchInputProps>(
           placeholder="Search in all notes..."
           value={query}
           onChange={e => onChange(e.target.value)}
-          onKeyDown={onKeyDown}
         />
         {loading && (
           <svg
+            aria-hidden="true"
             className="h-4 w-4 shrink-0 animate-spin text-muted-foreground"
             data-testid="search-spinner"
             viewBox="0 0 24 24"
@@ -290,7 +437,7 @@ interface SearchContentProps {
   dateDisplayFormat: DateDisplayFormat
   listRef: React.RefObject<HTMLDivElement | null>
   onSelect: (result: SearchResult) => void
-  onHover: (index: number) => void
+  onHover: (index: number, event: React.MouseEvent<HTMLDivElement>) => void
 }
 
 interface SearchResultRowProps {
@@ -302,7 +449,7 @@ interface SearchResultRowProps {
   showWorkspace: boolean
   dateDisplayFormat: DateDisplayFormat
   onSelect: (result: SearchResult) => void
-  onHover: (index: number) => void
+  onHover: (index: number, event: React.MouseEvent<HTMLDivElement>) => void
 }
 
 interface SearchResultPresentation {
@@ -362,12 +509,15 @@ function SearchResultRow({
 
   return (
     <div
+      role="option"
+      aria-selected={selected}
+      tabIndex={-1}
       className={cn(
-        "cursor-pointer px-4 py-2.5 transition-colors",
+        "w-full cursor-pointer border-0 bg-transparent px-4 py-2.5 text-left transition-colors",
         selected ? "bg-accent" : "hover:bg-secondary",
       )}
       onClick={() => onSelect(result)}
-      onMouseEnter={() => onHover(index)}
+      onMouseMove={(event) => onHover(index, event)}
     >
       <div className="flex items-center gap-2">
         {createElement(presentation.TypeIcon, {
@@ -446,7 +596,7 @@ function SearchContent({
       {hasResults && (
         <>
           <SearchResultsHeader count={results.length} elapsedMs={elapsedMs} />
-          <div ref={listRef}>
+          <div ref={listRef} role="listbox" aria-label="Search results">
             {results.map((result, i) => (
               <SearchResultRow
                 key={result.path}
@@ -466,4 +616,8 @@ function SearchContent({
       )}
     </div>
   )
+}
+
+function shouldApplySearchResultHover(event: React.MouseEvent<HTMLDivElement>): boolean {
+  return event.movementX !== 0 || event.movementY !== 0
 }

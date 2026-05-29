@@ -36,9 +36,14 @@ files:
     command.navigation.showArchivedNotes: 241399b908884adfe8608a3ab827ca74
     command.navigation.listType: 4f70c27c6826a37543c8ada561397c22
     command.note.newNote: 23c4edda8b815f750782f01870d27271
+    command.note.newNoteInCurrentFolder: 167b765903c70ab1b645908ff8a899ab
     command.note.newType: adce5108f18945cc502a06c02445e32d
     command.note.newTypedNote: 1493eda772c2179cb6247169d00723b2
     command.note.saveNote: 2a309cda46e95b00d2a5a8afb3cc0047
+    command.note.undo: 1cdc076b28f70afac5fcedadf99fa119
+    command.note.undoAction: 83a1f43c314533161109d8d4daf032f2
+    command.note.redo: 5afeaba074ef570dc720caaa855d49f6
+    command.note.redoAction: 7556c9dd6845991933c56006bf7ffbac
     command.note.pastePlainText: 09e8075dbd91e11878f8f4a138df760c
     command.note.findInNote: f72f8f93d8e6119d5d08b60eb3a7b3bc
     command.note.replaceInNote: b008e2e20c5e4cd202f4386271d6bed1
@@ -54,6 +59,7 @@ files:
     command.note.removeIcon: 4bccbad66025e506b37b4218498b299c
     command.note.changeType: 4a54ffd47ed1f65ee97f34bfe8c3de14
     command.note.moveToFolder: 3a0f26c42b9168ad839960d134065905
+    command.note.copyDeepLink: 8de1795f59af124594dc4decf77909a1
     command.note.openNewWindow: 6f67b2857093fa0fd45b1122dff4865d
     command.git.initialize: 54a57cdc7105db6fb22dca661ce01ad6
     command.git.commitPush: 8cb5faa4019716f43dd69c41496b1d46
@@ -183,12 +189,12 @@ files:
     settings.allNotesVisibility.unsupported: 257fe04419c9f6543a43e58b1edf9eb5
     settings.allNotesVisibility.unsupportedDescription: a3b8aa66900c742f001cd4533b3df44a
     settings.aiAgents.title: 27f08387b26e1ceeb1b60bd9c97e7a47
-    settings.aiAgents.description: 042a8037f1a4f90c76ce31a49fdff59c
+    settings.aiAgents.description: 768c138c3432fb159ac58c5a4471e786
     settings.aiFeatures.enable: af47a6b2bd32a7b7309bac7bef34f026
     settings.aiFeatures.enableDescription: 7d3916f7f9e1bf8b8797f50f4533b9da
     settings.aiAgents.default: 6af573559fd05d8c35bc57b41cc78e24
     settings.aiAgents.defaultTarget: 5acfc74fd97a6dd2d67d15c66de5eed5
-    settings.aiAgents.agentGroup: 965530cbbec45b1754ed3ece120399f7
+    settings.aiAgents.agentGroup: 11eaa7f817e3f24d54f3cf3025be49b1
     settings.aiAgents.localGroup: d34f4b997ce78da5aa57d657a5d6fcb5
     settings.aiAgents.apiGroup: 589a257cbd265eaa7de93de8b4084dff
     settings.aiAgents.installed: 73329564760013a7824ff9d5d1af91ff
@@ -199,11 +205,11 @@ files:
     settings.aiAgents.apiLocalKey: 119de2f31867b273a134f05bc56b9e57
     settings.aiAgents.apiEnv: e011db3dff54ed3deae37a9615e31ebf
     settings.aiAgents.apiNoKey: 5bbccbfcd09b28902bbf5319dd6e6053
-    settings.aiAgents.installedTitle: 5cb9b5ae5ebc66652814dff4584705cc
-    settings.aiAgents.installedDescription: fb9ba9667725fb40fa1e5d58a2c02692
+    settings.aiAgents.installedTitle: 0de6536215f76c44351ba4d809804c7a
+    settings.aiAgents.installedDescription: 27c8ed48439ac4a613409f5303fbca84
     settings.aiAgents.noVersion: 89831adb7114946e916b9c31d57a1e33
     settings.aiProviders.title: 63eb84d8510f9f086d282ec7d47adaa1
-    settings.aiProviders.description: 6c86c013eb6fb198b51e29ec47d66464
+    settings.aiProviders.description: d29dfa440713d15de311d29a64a27767
     settings.aiProviders.localTitle: c7c20443d8aaf04271df9d713f5c02ce
     settings.aiProviders.localDescription: 7abed40ef2e46741c64ff47e423cca39
     settings.aiProviders.apiTitle: 66537b9e5200ebbbfbd091144d8afbcc
@@ -307,6 +313,46 @@ files:
     ai.panel.placeholder.missing: 547c492026d115608067988b7cfbb9a9
     ai.panel.placeholder.ready: 31f5265c2e0432a7ca10d08e5c6f3114
     ai.panel.send: 747c6a3564774149c989884e0c581d53
+    ai.workspace.title: 375099f0c804e924c1dc275370710d92
+    ai.workspace.newChat: a917baaf1484ec5dc85f19ab8fc4f4e9
+    ai.workspace.collapseSidebar: 9ecc763686b7c61547281f3e05ffd06f
+    ai.workspace.expandSidebar: 281b619f3da2ba27e604302c3c00db56
+    ai.workspace.close: 184649ab030e9a609488608221c28d8c
+    ai.workspace.expandPanel: edbe17b531457367c1412e4b6349c194
+    ai.workspace.restorePanel: 64eb6176c678c6b395cfc93bac02a16f
+    ai.workspace.closeChat: 6c5be35688a466297db40c3a65ac9805
+    ai.workspace.popOut: 85ec25ec056b3082651e6e3fcfa57416
+    ai.workspace.dock: 72e81ed23007ec6fb9820b9abec353c4
+    ai.workspace.settings: 2c178b1d7a60a3c2b37ca4221d322899
+    ai.workspace.archive: a02bc089273a8c460ea3d2cd2c257b59
+    ai.workspace.restore: 98ee8b364870e27dd48aca3240801abf
+    ai.workspace.showArchived: ae2bcb4cb837cc09a5767153efe4bf39
+    ai.workspace.hideArchived: e7c72757d5bc7330d876eeb1b6ce9c53
+    ai.workspace.noActiveChats: f0cdbf09f23eb9a2efbb5977bcc39c1a
+    ai.workspace.noArchivedChats: 68410efd12fc0308ce1ed2225000d4d5
+    ai.workspace.chatTitle: 2ecae1c7ffb3296a789ff8f3b3ed2922
+    ai.workspace.renameChat: 0feba25e166f55afc51c4ebb33d8d757
+    ai.workspace.status.archived: 7d69b3cb4cada18ae61811304f8fbcb5
+    ai.workspace.status.idle: e599161956d626eda4cb0a5ffb85271c
+    ai.workspace.status.running: 5bda814c4aedb126839228f1a3d92f09
+    ai.workspace.status.done: f92965e2c8a7afb3c1b9a5c09a263636
+    ai.workspace.status.error: 902b0d55fddef6f8d651fe1035b7d4bd
+    ai.workspace.permissionMode: 5a7983f759c9e15ce53d7326f0abad71
+    ai.workspace.guidanceWarning: 00d95da9bc82394785728dec587b026e
+    ai.workspace.targetLabel: df5dd38c32585fe0c71c955b3a31f83c
+    ai.workspace.targetLocalAgents: 5a6a65e960093bfc37b4cc81c4a9f773
+    ai.workspace.targetLocalModels: c7c20443d8aaf04271df9d713f5c02ce
+    ai.workspace.targetApiModels: 66537b9e5200ebbbfbd091144d8afbcc
+    ai.workspace.noTargets: 7c3ed1f10281b41070e5a5cbe77453d7
+    ai.workspace.target.localAgents: 5a6a65e960093bfc37b4cc81c4a9f773
+    ai.workspace.target.localModels: c7c20443d8aaf04271df9d713f5c02ce
+    ai.workspace.target.apiModels: 66537b9e5200ebbbfbd091144d8afbcc
+    ai.workspace.target.none: 7c3ed1f10281b41070e5a5cbe77453d7
+    ai.workspace.target.unavailable: 453e6aa38d87b28ccae545967c53004f
+    ai.workspace.target.installed: 98dd43dfae05b11befe1f140e0ec787a
+    ai.workspace.target.installedVersion: 8677756d761e4cce240a637805482946
+    ai.workspace.target.localModel: d34f4b997ce78da5aa57d657a5d6fcb5
+    ai.workspace.target.apiModel: 589a257cbd265eaa7de93de8b4084dff
     mcp.setup.manageTitle: d786c7b9ab9b2406258648931bca0e01
     mcp.setup.setupTitle: b4b373f690c8a0008885b31e78e93a5c
     mcp.setup.connectedDescription: a2a3be70c0ac9fa7ef112df5252249fa
@@ -366,6 +412,7 @@ files:
     sidebar.action.createFolder: 5dc1e97c14fbe72d8b566ce29c39f010
     sidebar.action.renameFolder: db76034f8218cda07dadb746a5643019
     sidebar.action.deleteFolder: 2a2f15300f6f7c81d69860ac1796b517
+    sidebar.action.createNodeInFolderMenu: 857a479229a4ab0bc62bbfb621d3180a
     sidebar.action.revealFolderMenu: 76f4ed52da9937ae432dcf5a108fabb4
     sidebar.action.copyFolderPathMenu: 1779ec6018a385912c1a5499a1bbf2b2
     sidebar.action.renameFolderMenu: deb1d8fa030292e7eda2c244b313aca2
@@ -472,8 +519,23 @@ files:
     editor.toolbar.delete: f48134a07b016a1de05d4ba6d2fbfb41
     editor.toolbar.revealFile: 76f4ed52da9937ae432dcf5a108fabb4
     editor.toolbar.copyFilePath: 64c6cec5ca57efbb8c9c93ae5fbccd27
+    editor.toolbar.copyNoteDeepLink: 0fff274a7c47e7c12457c0b7412e86ce
     editor.toolbar.moreActions: 89e19353176b94068dec4c768c25e70b
     editor.toolbar.openProperties: 948b90b60b8ce827f179e8c5b85b112e
+    filePreview.copyDeepLink: b75833669968adbef634495636e3fe50
+    deepLinks.copied: 6ada57681192daf3b4afa07ce7a30575
+    deepLinks.error.ambiguousVault: 4365c6d5cf8c2c1165259b32d24a6274
+    deepLinks.error.copyFailed: 57b74ecce2d00b4c327d15830f79410d
+    deepLinks.error.invalidScheme: 58eaa7ac701a0508cbae90c5d3837ce4
+    deepLinks.error.malformedUrl: 4f85323322ef0a1d627df621edb749c7
+    deepLinks.error.missingFile: 79a0c73176508c58b4d785fabaf7d8cc
+    deepLinks.error.missingPath: a6bb1c92f1a38476ff603a2d3ff81223
+    deepLinks.error.missingVault: e2936e1f599c7ed229efb5d4a122fc4b
+    deepLinks.error.openFailed: 97901feafe25688fcc3fc4dcfaf82619
+    deepLinks.error.outsideVault: fda2fd5675b596df7ba0e0b1a11ec47d
+    deepLinks.error.unavailableVault: 911dfaf8e855bd8cadefe7df9a98a7e8
+    deepLinks.error.unknownVault: b4940569e884833f50466177dab1f62f
+    deepLinks.error.unsafePath: e09caab43be8c2372bfc94e947ea34e6
     editor.slash.math: a49950aa047c2292e989e368a97a3aae
     tableOfContents.title: f61d6c3e3733db355168b7e1aee6780b
     tableOfContents.close: d3292972a10edd1a06a627f3552f760a
@@ -630,6 +692,7 @@ files:
     status.ai.vaultGuidance: 7bb4644efe6ae7cec9993c8bd85f1519
     status.ai.restoreGuidance: 23331fecc692d11d85cf24838ed273f2
     status.ai.openOptions: d387b1ab67586c7a2d83db8900a4dd8e
+    status.ai.openWorkspace: 178247429f30251ce21265570b612e9f
     status.ai.modelTargets: 8f3ceb96e088f8bdaecc236778401ac9
     status.ai.localChat: 215a24e3d38fb8b68deea6dad0142326
     status.ai.apiChat: 6dffd5b9997885efe701631cea5c470d
@@ -665,3 +728,4 @@ files:
     locale.plPL: c730389bc8d99e59c867766babdd48b5
     locale.beBY: 0a6de4460095f398e8a45ed512a7538f
     locale.beLatn: 9c454dccccd6aaac0121a45b923dc5ad
+    locale.idID: cc1c9b57607b4439578b68074a5e2d80

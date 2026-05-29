@@ -17,6 +17,7 @@ import { buildFilterCommands } from './commands/filterCommands'
 import { localizeCommandActions } from './commands/localizeCommands'
 import { extractVaultTypes } from '../utils/vaultTypes'
 import type { GitRepositoryOption } from '../utils/gitRepositories'
+import type { ImmediateCreateOptions } from './useNoteCreation'
 
 // Re-export types and helpers for backward compatibility
 export type { CommandAction, CommandGroup } from './commands/types'
@@ -56,6 +57,7 @@ interface CommandRegistryConfig {
   onOpenInNewWindow?: () => void
   onRevealActiveFile?: (path: string) => void
   onCopyActiveFilePath?: (path: string) => void
+  onCopyActiveDeepLink?: (path: string) => void
   onOpenActiveFileExternal?: (path: string) => void
   onToggleFavorite?: (path: string) => void
   onToggleOrganized?: (path: string) => void
@@ -65,9 +67,15 @@ interface CommandRegistryConfig {
   onRestoreDeletedNote?: () => void
   canRestoreDeletedNote?: boolean
   onQuickOpen: () => void
-  onCreateNote: () => void
+  onCreateNote: (type?: string, options?: ImmediateCreateOptions) => void
   onCreateNoteOfType: (type: string) => void
   onSave: () => void
+  onUndo?: () => void
+  onRedo?: () => void
+  canUndo?: boolean
+  canRedo?: boolean
+  undoLabel?: string | null
+  redoLabel?: string | null
   onPastePlainText: () => void
   onOpenSettings: () => void
   onOpenFeedback?: () => void
@@ -129,10 +137,20 @@ interface CommandRegistryConfig {
   onSetNoteListFilter?: (filter: NoteListFilter) => void
 }
 
+function currentFolderCreateOptions(selection: SidebarSelection | undefined): ImmediateCreateOptions | undefined {
+  if (selection?.kind !== 'folder') return undefined
+  return {
+    creationPath: 'folder_command_palette',
+    folderPath: selection.path,
+    vaultPath: selection.rootPath,
+  }
+}
+
 export function useCommandRegistry(config: CommandRegistryConfig): import('./commands/types').CommandAction[] {
   const {
     activeTabPath, entries, modifiedCount,
-    onQuickOpen, onCreateNote, onCreateNoteOfType, onSave, onPastePlainText, onOpenSettings, onOpenFeedback,
+    onQuickOpen, onCreateNote, onCreateNoteOfType, onSave, onUndo, onRedo, canUndo, canRedo, undoLabel, redoLabel,
+    onPastePlainText, onOpenSettings, onOpenFeedback,
     onDeleteNote, onArchiveNote, onUnarchiveNote,
     onCommitPush, onPull, onResolveConflicts, onSetViewMode, onToggleInspector, onToggleDiff, onToggleRawEditor, onFindInNote, onReplaceInNote,
     noteWidth, defaultNoteWidth, onSetNoteWidth, onSetDefaultNoteWidth, onToggleAIChat, onToggleTableOfContents, onOpenVault, onCreateEmptyVault,
@@ -150,7 +168,7 @@ export function useCommandRegistry(config: CommandRegistryConfig): import('./com
     onReloadVault, onRepairVault,
     locale, systemLocale, selectedUiLanguage, onSetUiLanguage, onSetThemeMode,
     onSetNoteIcon, onRemoveNoteIcon, activeNoteHasIcon, onChangeNoteType, onMoveNoteToFolder, canMoveNoteToFolder,
-    onOpenInNewWindow, onRevealActiveFile, onCopyActiveFilePath, onOpenActiveFileExternal, onToggleFavorite, onToggleOrganized,
+    onOpenInNewWindow, onRevealActiveFile, onCopyActiveFilePath, onCopyActiveDeepLink, onOpenActiveFileExternal, onToggleFavorite, onToggleOrganized,
     onCustomizeNoteListColumns, canCustomizeNoteListColumns,
     onRestoreDeletedNote, canRestoreDeletedNote,
     selection, noteListFilter, onSetNoteListFilter,
@@ -166,6 +184,7 @@ export function useCommandRegistry(config: CommandRegistryConfig): import('./com
   const isArchived = activeEntry?.archived ?? false
   const isFavorite = activeEntry?.favorite ?? false
   const isSectionGroup = selection?.kind === 'sectionGroup'
+  const folderCreateOptions = useMemo(() => currentFolderCreateOptions(selection), [selection])
   const noteListColumnsLabel = config.noteListColumnsLabel ?? (
     selection?.kind === 'filter' && selection.filter === 'all'
       ? 'Customize All Notes columns'
@@ -195,21 +214,25 @@ export function useCommandRegistry(config: CommandRegistryConfig): import('./com
 
   const noteCommands = useMemo(() => buildNoteCommands({
     hasActiveNote, activeTabPath, activeFileKind: activeEntry?.fileKind ?? 'markdown', isArchived,
-    onCreateNote, onCreateType, onSave,
+    currentFolderCreateOptions: folderCreateOptions, onCreateNote, onCreateType, onSave,
+    onUndo, onRedo, canUndo, canRedo, undoLabel, redoLabel,
     onFindInNote, onReplaceInNote, onPastePlainText,
     onDeleteNote, onArchiveNote, onUnarchiveNote,
     onChangeNoteType, onMoveNoteToFolder, canMoveNoteToFolder,
     onSetNoteIcon, onRemoveNoteIcon, activeNoteHasIcon, onOpenInNewWindow,
     onRevealActiveFile, onCopyActiveFilePath, onOpenActiveFileExternal,
+    onCopyActiveDeepLink,
     onToggleFavorite, isFavorite,
     onToggleOrganized, isOrganized: activeEntry?.organized ?? false,
     onRestoreDeletedNote, canRestoreDeletedNote,
   }), [
     hasActiveNote, activeTabPath, activeEntry?.fileKind, isArchived,
-    onCreateNote, onCreateType, onSave, onFindInNote, onReplaceInNote, onPastePlainText, onDeleteNote, onArchiveNote, onUnarchiveNote,
+    folderCreateOptions, onCreateNote, onCreateType, onSave, onUndo, onRedo, canUndo, canRedo, undoLabel, redoLabel,
+    onFindInNote, onReplaceInNote, onPastePlainText, onDeleteNote, onArchiveNote, onUnarchiveNote,
     onChangeNoteType, onMoveNoteToFolder, canMoveNoteToFolder,
     onSetNoteIcon, onRemoveNoteIcon, activeNoteHasIcon, onOpenInNewWindow,
     onRevealActiveFile, onCopyActiveFilePath, onOpenActiveFileExternal,
+    onCopyActiveDeepLink,
     onToggleFavorite, isFavorite,
     onToggleOrganized, activeEntry?.organized, onRestoreDeletedNote, canRestoreDeletedNote,
   ])
